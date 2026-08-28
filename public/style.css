@@ -1125,3 +1125,108 @@ body {
         width: 240px;
     }
 }
+
+/* ==============================
+   FINAL POLISH (additive only)
+   ============================== */
+
+.nav-item,
+button,
+.btn,
+select,
+input,
+textarea {
+    transition: background-color .18s ease, color .18s ease,
+                border-color .18s ease, box-shadow .18s ease,
+                transform .12s ease;
+}
+
+button:hover,
+.btn:hover {
+    filter: brightness(1.05);
+}
+
+button:active,
+.btn:active {
+    transform: translateY(1px);
+}
+
+.nav-item:focus-visible,
+button:focus-visible,
+.btn:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .15);
+}
+
+button:disabled,
+.btn:disabled {
+    opacity: .6;
+    cursor: not-allowed;
+    filter: none;
+    transform: none;
+}
+
+button,
+.btn,
+.nav-item {
+    cursor: pointer;
+}
+
+/* Consistent card / section rhythm across every view */
+.view-section > .card + .card,
+.view-section > .incident-section + .incident-section {
+    margin-top: 18px;
+}
+
+/* Incident section matches dashboard typography */
+.incident-section h2,
+.incident-section h3 {
+    letter-spacing: -0.01em;
+}
+
+@media (max-width: 700px) {
+
+    .kpi-grid,
+    .cards,
+    .grid-2,
+    .grid-3 {
+        grid-template-columns: 1fr !important;
+    }
+
+    .main {
+        padding: 16px 14px 32px;
+    }
+
+    table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+
+    .form-row,
+    .btn-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .btn-row button,
+    .btn-row .btn {
+        width: 100%;
+    }
+}
+
+#map {
+    margin-bottom: 18px;
+    border-radius: 10px;
+}

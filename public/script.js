@@ -190,10 +190,15 @@ function initMap() {
 
     const leafletMap = L.map("map").setView([27.5, 93.5], 6);
 
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors",
+    // "osm-intl" = OpenStreetMap tiles with internationalised (Latin/English)
+    // labels. The plain OSM tile server renders labels in each country's local
+    // script (Chinese, Assamese, etc.), which is why labels looked Chinese when
+    // zooming near the China border. No API key required.
+    L.tileLayer("https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}{r}.png", {
+        attribution: "&copy; OpenStreetMap contributors | Wikimedia Maps",
         maxZoom: 19
     }).addTo(leafletMap);
+
 
 
     leafletMap.on("click", function (event) {

@@ -1225,3 +1225,8 @@ button,
         width: 100%;
     }
 }
+
+#map {
+    margin-bottom: 18px;
+    border-radius: 10px;
+}

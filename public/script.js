@@ -190,10 +190,11 @@ function initMap() {
 
     const leafletMap = L.map("map").setView([27.5, 93.5], 6);
 
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OpenStreetMap &copy; CARTO",
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap contributors",
         maxZoom: 19
     }).addTo(leafletMap);
+
 
     leafletMap.on("click", function (event) {
         selectedStart = { lat: event.latlng.lat, lng: event.latlng.lng };

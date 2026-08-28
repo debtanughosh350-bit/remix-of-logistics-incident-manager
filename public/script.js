@@ -770,6 +770,8 @@ async function submitIncident() {
     const peopleEl = byId("incident-people");
     const descriptionEl = byId("incident-description");
     const vulnerabilityEl = byId("incident-vulnerability");
+    const datetimeEl = byId("incident-datetime");
+    const incidentStatusEl = byId("incident-status");
     const statusEl = byId("incident-form-status");
 
     const type = typeEl ? typeEl.value.trim() : "";
@@ -777,6 +779,8 @@ async function submitIncident() {
     const peopleAffected = peopleEl ? parseInt(peopleEl.value, 10) : NaN;
     const description = descriptionEl ? descriptionEl.value.trim() : "";
     const vulnerabilities = vulnerabilityEl ? vulnerabilityEl.value.trim() : "";
+    const reportedAtRaw = datetimeEl ? datetimeEl.value : "";
+    const incidentStatus = incidentStatusEl && incidentStatusEl.value ? incidentStatusEl.value : "OPEN";
 
     if (statusEl) statusEl.textContent = "";
 
@@ -797,6 +801,24 @@ async function submitIncident() {
         return;
     }
 
+    let reportedAt = nowISO();
+    if (reportedAtRaw) {
+        const parsed = new Date(reportedAtRaw);
+        if (isNaN(parsed.getTime())) {
+            if (statusEl) statusEl.textContent = "Please enter a valid date and time.";
+            return;
+        }
+        if (parsed.getTime() > Date.now() + 60000) {
+            if (statusEl) statusEl.textContent = "Incident date/time cannot be in the future.";
+            return;
+        }
+        reportedAt = parsed.toISOString();
+    }
+    if (description.length > 500) {
+        if (statusEl) statusEl.textContent = "Description must be under 500 characters.";
+        return;
+    }
+
     const incident = {
         id: generateId("INC"),
         type: type,
@@ -806,8 +828,8 @@ async function submitIncident() {
         vulnerabilities: vulnerabilities,
         latitude: incidentLocation.lat,
         longitude: incidentLocation.lng,
-        timestamp: nowISO(),
-        status: "OPEN",
+        timestamp: reportedAt,
+        status: incidentStatus,
         supabaseId: null,
         synced: false
     };
@@ -825,8 +847,27 @@ async function submitIncident() {
     if (formEl) formEl.reset();
     incidentLocation = null;
     setText("incident-location-display", "Not set");
+    setText("incident-location-error", "");
 
     syncIncidentToSupabase(incident);
+}
+
+function clearIncidentForm() {
+    const formEl = byId("incident-form");
+    if (formEl) formEl.reset();
+    incidentLocation = null;
+    setText("incident-location-display", "Not set");
+    setText("incident-location-error", "");
+    setText("incident-form-status", "Form cleared.");
+}
+
+function viewIncidents() {
+    const nav = document.querySelector('.nav-item[data-target="view-incidents"]');
+    if (nav) nav.click();
+    const listEl = byId("incident-list");
+    if (listEl && listEl.scrollIntoView) {
+        listEl.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
 }
 
 async function updateIncidentStatus(id, newStatus) {
@@ -2012,6 +2053,18 @@ function initNavigation() {
             if (titleEl) {
                 titleEl.textContent = item.textContent.trim();
             }
+
+            const subtitleEl = byId("page-subtitle");
+            if (subtitleEl) {
+                subtitleEl.textContent = item.getAttribute("data-subtitle") || "";
+            }
+
+            renderIncidentList();
+            loadRescueDashboard();
+
+            if (map && typeof map.invalidateSize === "function") {
+                setTimeout(function () { map.invalidateSize(); }, 200);
+            }
         });
     });
 }
@@ -2103,6 +2156,8 @@ window.useSelectedIncidentLocation = useSelectedIncidentLocation;
 window.getIncidentLocation = getIncidentLocation;
 window.submitIncident = submitIncident;
 window.updateIncidentStatus = updateIncidentStatus;
+window.clearIncidentForm = clearIncidentForm;
+window.viewIncidents = viewIncidents;
 window.focusIncidentOnMap = focusIncidentOnMap;
 
 window.useSelectedSOSLocation = useSelectedSOSLocation;
@@ -2117,428 +2172,16 @@ window.saveResource = saveResource;
 window.deleteResource = deleteResource;
 
 window.loadRescueDashboard = loadRescueDashboard;
-// ===============================
-// SIDEBAR MENU FUNCTIONALITY
-// ===============================
-
-document.addEventListener("DOMContentLoaded", function () {
-
-    const menuItems = document.querySelectorAll(".sidebar nav a");
-
-    menuItems.forEach(function (item) {
-
-        item.addEventListener("click", function (event) {
-
-            const text = item.textContent.trim();
-
-            // Ignore already working links
-            if (
-                item.getAttribute("href") === "#rescue-dashboard" ||
-                item.getAttribute("href") === "#sos-help" ||
-                item.getAttribute("href") === "#incident-report"
-            ) {
-                return;
-            }
-
-            event.preventDefault();
-
-            // Remove active class
-            menuItems.forEach(function (menu) {
-                menu.classList.remove("active");
-            });
-
-            // Add active class
-            item.classList.add("active");
-
-            // Dashboard
-            if (text === "Dashboard") {
-                showDashboard();
-            }
-
-            // Route Intelligence
-            else if (text === "Route Intelligence") {
-                showRouteIntelligence();
-            }
-
-            // Vehicles
-            else if (text === "Vehicles") {
-                showVehicles();
-            }
-
-            // Alerts
-            else if (text === "Alerts") {
-                showAlerts();
-            }
-
-            // Reports
-            else if (text === "Reports") {
-                showReports();
-            }
-
-        });
-
-    });
-
-
-    // ===============================
-    // DASHBOARD
-    // ===============================
-
-    function showDashboard() {
-
-        const main = document.querySelector(".main");
-
-        if (!main) return;
-
-        main.innerHTML = `
-            <header class="header">
-                <div>
-                    <h1>Dashboard</h1>
-                    <p>North Eastern Region Logistics Monitoring</p>
-                </div>
-
-                <div class="user">
-                    🔔 &nbsp; Admin
-                </div>
-            </header>
-
-            <section class="stats">
-
-                <div class="card">
-                    <h3>🟢 Active Routes</h3>
-                    <h2>42</h2>
-                    <p>Currently accessible</p>
-                </div>
-
-                <div class="card">
-                    <h3>🔴 Blocked Routes</h3>
-                    <h2>7</h2>
-                    <p>Requires attention</p>
-                </div>
-
-                <div class="card">
-                    <h3>🟠 High Risk Routes</h3>
-                    <h2>13</h2>
-                    <p>Risk detected</p>
-                </div>
-
-                <div class="card">
-                    <h3>🚚 Active Vehicles</h3>
-                    <h2>28</h2>
-                    <p>Currently in transit</p>
-                </div>
-
-            </section>
-
-            <section class="dashboard-section">
-
-                <div class="card">
-                    <h2>📍 Live Logistics Overview</h2>
-                    <p>Monitor routes, vehicles and incidents across North Eastern Region.</p>
-                </div>
-
-                <div class="card">
-                    <h2>⚠️ Recent Alerts</h2>
-                    <p>7 blocked routes and 13 high-risk routes detected.</p>
-                </div>
-
-            </section>
-        `;
-    }
-
-
-    // ===============================
-    // ROUTE INTELLIGENCE
-    // ===============================
-
-    function showRouteIntelligence() {
-
-        const main = document.querySelector(".main");
-
-        main.innerHTML = `
-
-            <header class="header">
-
-                <div>
-                    <h1>Route Intelligence</h1>
-                    <p>AI-powered route monitoring and analysis</p>
-                </div>
-
-                <div class="user">
-                    🔔 &nbsp; Admin
-                </div>
-
-            </header>
-
-            <section class="dashboard-section">
-
-                <div class="card">
-
-                    <h2>🛣️ Smart Route Analysis</h2>
-
-                    <p>
-                        AI analyzes road conditions, accessibility,
-                        weather and incidents to identify the safest route.
-                    </p>
-
-                    <br>
-
-                    <button onclick="analyzeRoute()">
-                        🔍 Analyze Route
-                    </button>
-
-                </div>
-
-
-                <div class="card">
-
-                    <h2>🟢 Recommended Route</h2>
-
-                    <p id="routeResult">
-                        Click "Analyze Route" to get recommendation.
-                    </p>
-
-                </div>
-
-            </section>
-        `;
-    }
-
-
-    // ===============================
-    // VEHICLES
-    // ===============================
-
-    function showVehicles() {
-
-        const main = document.querySelector(".main");
-
-        main.innerHTML = `
-
-            <header class="header">
-
-                <div>
-                    <h1>Vehicles</h1>
-                    <p>Live vehicle monitoring</p>
-                </div>
-
-                <div class="user">
-                    🔔 &nbsp; Admin
-                </div>
-
-            </header>
-
-
-            <section class="dashboard-section">
-
-                <div class="card">
-
-                    <h2>🚚 Active Vehicles</h2>
-
-                    <h1>28</h1>
-
-                    <p>Vehicles currently in transit</p>
-
-                </div>
-
-
-                <div class="card">
-
-                    <h2>🟢 Available</h2>
-
-                    <h1>18</h1>
-
-                    <p>Ready for transportation</p>
-
-                </div>
-
-
-                <div class="card">
-
-                    <h2>🔴 Maintenance</h2>
-
-                    <h1>4</h1>
-
-                    <p>Vehicles under maintenance</p>
-
-                </div>
-
-            </section>
-
-
-            <section class="dashboard-section">
-
-                <div class="card">
-
-                    <h2>🚛 Vehicle Status</h2>
-
-                    <p>Vehicle ID: NER-001 — 🟢 Active</p>
-
-                    <p>Vehicle ID: NER-002 — 🟢 Active</p>
-
-                    <p>Vehicle ID: NER-003 — 🟠 Delayed</p>
-
-                    <p>Vehicle ID: NER-004 — 🔴 Maintenance</p>
-
-                </div>
-
-            </section>
-        `;
-    }
-
-
-    // ===============================
-    // ALERTS
-    // ===============================
-
-    function showAlerts() {
-
-        const main = document.querySelector(".main");
-
-        main.innerHTML = `
-
-            <header class="header">
-
-                <div>
-
-                    <h1>Alerts</h1>
-
-                    <p>Important logistics alerts</p>
-
-                </div>
-
-                <div class="user">
-                    🔔 &nbsp; Admin
-                </div>
-
-            </header>
-
-
-            <section class="dashboard-section">
-
-                <div class="card">
-
-                    <h2>🔴 Critical Alerts</h2>
-
-                    <p>
-                        ⚠️ 7 routes are currently blocked.
-                    </p>
-
-                </div>
-
-
-                <div class="card">
-
-                    <h2>🟠 High Risk</h2>
-
-                    <p>
-                        ⚠️ 13 routes have high-risk conditions.
-                    </p>
-
-                </div>
-
-
-                <div class="card">
-
-                    <h2>🟢 System Status</h2>
-
-                    <p>
-                        All major systems are operational.
-                    </p>
-
-                </div>
-
-            </section>
-        `;
-    }
-
-
-    // ===============================
-    // REPORTS
-    // ===============================
-
-    function showReports() {
-
-        const main = document.querySelector(".main");
-
-        main.innerHTML = `
-
-            <header class="header">
-
-                <div>
-
-                    <h1>Reports</h1>
-
-                    <p>Logistics performance reports</p>
-
-                </div>
-
-                <div class="user">
-                    🔔 &nbsp; Admin
-                </div>
-
-            </header>
-
-
-            <section class="dashboard-section">
-
-                <div class="card">
-
-                    <h2>📊 Logistics Report</h2>
-
-                    <p>Active Routes: <b>42</b></p>
-
-                    <p>Blocked Routes: <b>7</b></p>
-
-                    <p>High Risk Routes: <b>13</b></p>
-
-                    <p>Active Vehicles: <b>28</b></p>
-
-                </div>
-
-
-                <div class="card">
-
-                    <h2>📈 Accessibility Performance</h2>
-
-                    <p>
-                        Overall regional accessibility is being
-                        continuously monitored.
-                    </p>
-
-                </div>
-
-            </section>
-        `;
-    }
-
-
-    // ===============================
-    // ROUTE ANALYSIS BUTTON
-    // ===============================
-
-    window.analyzeRoute = function () {
-
-        const result = document.getElementById("routeResult");
-
-        if (result) {
-
-            result.innerHTML = `
-                🟢 <b>Best Route Found</b><br><br>
-
-                Guwahati → Shillong → Aizawl
-
-                <br><br>
-
-                Accessibility Score: <b>87/100</b>
-
-                <br>
-
-                Risk Level: <b>Low</b>
-            `;
-
-        }
-
-    };
-
-});
+/* ==========================================================================
+   20. ROUTE INTELLIGENCE DEMO ANALYSIS
+   ========================================================================== */
+
+window.analyzeRoute = function () {
+    const result = byId("routeResult");
+    if (!result) return;
+    result.innerHTML =
+        '\u{1F7E2} <b>Best Route Found</b><br><br>' +
+        'Guwahati &rarr; Shillong &rarr; Aizawl<br><br>' +
+        'Accessibility Score: <b>87/100</b><br>' +
+        'Risk Level: <b>Low</b>';
+};

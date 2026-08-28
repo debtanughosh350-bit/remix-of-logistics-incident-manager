@@ -1611,6 +1611,7 @@ function calculateDashboardKPIs() {
     setText("kpi-critical-sos", kpis.criticalSOS);
     setText("kpi-high-sos", kpis.highSOS);
     setText("kpi-open-incidents", kpis.openIncidents);
+    setText("kpi-open-incidents-report", kpis.openIncidents);
     setText("kpi-water-shortage", kpis.waterShortage);
     setText("kpi-food-shortage", kpis.foodShortage);
     setText("kpi-medicine-shortage", kpis.medicineShortage);

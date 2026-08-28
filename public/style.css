@@ -924,3 +924,204 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+/* ==============================
+   VIEW SECTIONS / NAVIGATION
+   ============================== */
+
+.view-section {
+    display: none;
+}
+
+.view-section.active {
+    display: block;
+}
+
+
+/* ==============================
+   NOTIFICATION BELL
+   ============================== */
+
+.user {
+    position: relative;
+}
+
+.bell-btn {
+    background: transparent;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+    position: relative;
+}
+
+.unread-badge {
+    background: #dc2626;
+    color: white;
+    border-radius: 999px;
+    font-size: 11px;
+    padding: 1px 6px;
+    margin-left: 2px;
+}
+
+.bell-dropdown {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 110%;
+    width: 280px;
+    max-height: 320px;
+    overflow-y: auto;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    padding: 12px;
+    z-index: 1200;
+    text-align: left;
+}
+
+.bell-dropdown-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.bell-dropdown-head button {
+    background: #1d4e89;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+#bell-alerts-list div {
+    border-bottom: 1px solid #eef2f7;
+    padding: 8px 0;
+    font-size: 13px;
+}
+
+#bell-alerts-list p {
+    color: #64748b;
+    font-size: 12px;
+    margin-top: 3px;
+}
+
+
+/* ==============================
+   ALERT FILTERS
+   ============================== */
+
+.alert-filters {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+
+.filter-btn {
+    background: #e2e8f0;
+    color: #1f2937;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.filter-btn.active,
+.filter-btn:hover {
+    background: #1d4e89;
+    color: white;
+}
+
+
+/* ==============================
+   INCIDENT FORM EXTRAS
+   ============================== */
+
+.incident-section input[type="text"],
+.incident-section input[type="datetime-local"] {
+    width: 100%;
+    padding: 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-size: 14px;
+    background: #f8fafc;
+}
+
+.primary-btn {
+    background: #1d4e89;
+    color: white;
+    border: none;
+    padding: 12px 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.primary-btn:hover {
+    background: #102a43;
+}
+
+
+/* ==============================
+   VEHICLE TABLE
+   ============================== */
+
+.table-wrap {
+    overflow-x: auto;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.data-table th,
+.data-table td {
+    text-align: left;
+    padding: 12px 14px;
+    border-bottom: 1px solid #e2e8f0;
+    white-space: nowrap;
+}
+
+.data-table th {
+    background: #f1f5f9;
+    color: #102a43;
+}
+
+
+/* ==============================
+   RESPONSIVE (SECTIONS)
+   ============================== */
+
+@media (max-width: 700px) {
+
+    .sidebar {
+        position: static;
+        width: 100%;
+        min-height: auto;
+    }
+
+    body {
+        flex-direction: column;
+    }
+
+    .main {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .sidebar nav {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+
+    .bell-dropdown {
+        width: 240px;
+    }
+}

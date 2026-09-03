@@ -631,7 +631,7 @@ function pickSaferRouteIndex(analyses) {
     return bestIndex;
 }
 
-function drawRouteAnalysis(analysis) {
+function drawRouteAnalysis(analysis, fitView) {
     if (!map || !analysis || !analysis.coords.length) return;
 
     clearCurrentRoute();
@@ -643,7 +643,9 @@ function drawRouteAnalysis(analysis) {
         { color: style.color, weight: 5, opacity: 0.85 }
     ).addTo(map);
 
-    map.fitBounds(currentRouteLine.getBounds(), { padding: [30, 30] });
+    if (fitView !== false) {
+        map.fitBounds(currentRouteLine.getBounds(), { padding: [30, 30] });
+    }
 
     calculateAccessibilityScore(analysis.distanceKm, analysis.durationMin);
     setText("dashboard-risk", analysis.riskLevel);
@@ -742,7 +744,7 @@ function updateRouteRiskAnalysis() {
     const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
     if (chosen) {
         setText("dashboard-risk", chosen.riskLevel);
-        drawRouteAnalysis(chosen);
+        drawRouteAnalysis(chosen, false);
     }
 
     renderRouteIntelligence();
@@ -2548,12 +2550,10 @@ window.loadRescueDashboard = loadRescueDashboard;
    20. ROUTE INTELLIGENCE DEMO ANALYSIS
    ========================================================================== */
 
+// Re-analyses the routes that OSRM actually returned. No demo statistics.
 window.analyzeRoute = function () {
-    const result = byId("routeResult");
-    if (!result) return;
-    result.innerHTML =
-        '\u{1F7E2} <b>Best Route Found</b><br><br>' +
-        'Guwahati &rarr; Shillong &rarr; Aizawl<br><br>' +
-        'Accessibility Score: <b>87/100</b><br>' +
-        'Risk Level: <b>Low</b>';
+    updateRouteRiskAnalysis();
 };
+
+window.updateRouteRiskAnalysis = updateRouteRiskAnalysis;
+window.renderRouteIntelligence = renderRouteIntelligence;

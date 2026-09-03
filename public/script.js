@@ -413,7 +413,7 @@ async function findAccessibleRoute() {
         OSRM_BASE_URL +
         selectedStart.lng + "," + selectedStart.lat + ";" +
         destLatLng.lng + "," + destLatLng.lat +
-        "?overview=full&geometries=geojson";
+        "?overview=full&geometries=geojson&alternatives=true";
 
     let response;
     try {
@@ -443,33 +443,33 @@ async function findAccessibleRoute() {
         return;
     }
 
-    const route = data.routes[0];
-    const distanceKm = route.distance / 1000;
-    const durationMin = route.duration / 60;
+    lastRouteRequest = {
+        start: { lat: selectedStart.lat, lng: selectedStart.lng },
+        end: { lat: destLatLng.lat, lng: destLatLng.lng }
+    };
 
-    setText("dashboard-distance", distanceKm.toFixed(1) + " km");
-    setText("dashboard-time", Math.round(durationMin) + " min");
+    // Keep every genuine OSRM alternative. Nothing is invented here: if OSRM
+    // returns a single route, only that route is analysed and displayed.
+    lastRouteAnalyses = data.routes.map(function (route, index) {
+        return buildRouteAnalysis(route, index);
+    });
 
-    const score = calculateAccessibilityScore(distanceKm, durationMin);
-    const style = getRouteStyleForScore(score);
+    selectedRouteAnalysisIndex = pickSaferRouteIndex(lastRouteAnalyses);
 
-    clearCurrentRoute();
+    const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
 
-    if (map) {
-        const latlngs = route.geometry.coordinates.map(function (coord) {
-            return [coord[1], coord[0]];
-        });
+    setText("dashboard-distance", chosen.distanceKm.toFixed(1) + " km");
+    setText("dashboard-time", Math.round(chosen.durationMin) + " min");
 
-        currentRouteLine = L.polyline(latlngs, {
-            color: style.color,
-            weight: 5,
-            opacity: 0.85
-        }).addTo(map);
+    drawRouteAnalysis(chosen);
 
-        map.fitBounds(currentRouteLine.getBounds(), { padding: [30, 30] });
-    }
+    setText(
+        "route-status",
+        chosen.riskLabel + " — " + chosen.distanceKm.toFixed(1) + " km, " +
+        Math.round(chosen.durationMin) + " min, " + chosen.hazards.length + " hazard(s) near the route."
+    );
 
-    setText("route-status", style.label + " found — " + distanceKm.toFixed(1) + " km, " + Math.round(durationMin) + " min.");
+    renderRouteIntelligence();
 }
 
 async function searchDestination() {

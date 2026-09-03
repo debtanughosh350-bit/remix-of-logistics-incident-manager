@@ -1609,7 +1609,8 @@ function renderSOSList() {
             '<div class="incident-card severity-' + record.priorityLevel.toLowerCase() + '">' +
             "<strong>" + escapeHTML(record.id) + "</strong>" +
             "<p><b>Type:</b> " + escapeHTML(record.emergencyType) + "</p>" +
-            "<p><b>Priority:</b> " + escapeHTML(record.priorityLevel) + " (" + escapeHTML(record.priorityScore) + ")</p>" +
+            "<p><b>Priority:</b> " + escapeHTML(record.priorityLevel) + " (score " + escapeHTML(record.priorityScore) + "/100)</p>" +
+            sosPriorityExplanationHTML(record) +
             "<p><b>People affected:</b> " + escapeHTML(record.peopleAffected) + "</p>" +
             "<p><b>Status:</b> " + escapeHTML(record.status) + "</p>" +
             "</div>"

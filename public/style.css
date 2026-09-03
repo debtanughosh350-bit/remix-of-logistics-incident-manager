@@ -1260,3 +1260,14 @@ button,
     font-size: 0.82rem;
     opacity: 0.85;
 }
+
+/* SOS priority explanation (additive) */
+.sos-priority-why {
+    margin: 4px 0 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(148, 163, 184, 0.14);
+    border-left: 3px solid currentColor;
+    font-size: 0.82rem;
+    line-height: 1.35;
+}

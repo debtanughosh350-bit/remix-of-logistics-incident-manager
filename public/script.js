@@ -1398,32 +1398,152 @@ function getSelectedSOSVulnerabilities() {
     return Array.prototype.slice.call(checkboxes).map(function (cb) { return cb.value; });
 }
 
-function calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description) {
-    let score = SOS_EMERGENCY_BASE_SCORE[emergencyType] || 10;
+// --- Transparent, rule-based SOS priority scoring (0-100) --------------------
+// This is an explainable rule engine used for decision support in the
+// prototype. It is NOT a trained machine-learning model.
 
-    if (peopleAffected >= 20) score += 20;
-    else if (peopleAffected >= 10) score += 15;
-    else if (peopleAffected >= 5) score += 10;
-    else if (peopleAffected >= 2) score += 5;
+const SOS_VULNERABILITY_WEIGHT = {
+    "Children": 8,
+    "Elderly": 8,
+    "Pregnant": 9,
+    "Disabled": 9
+};
 
-    score += Math.min(vulnerabilities.length * 5, 20);
+const SOS_VULNERABILITY_LABEL = {
+    "Children": "child present",
+    "Elderly": "elderly person",
+    "Pregnant": "pregnant person",
+    "Disabled": "person with disability"
+};
 
+// Nearby disaster risk taken from the existing risk system (risk points shown
+// on the map plus unresolved incidents), within this radius of the SOS.
+const SOS_RISK_RADIUS_KM = 3;
+
+function getNearbySOSRisk(lat, lng) {
+    if (lat == null || lng == null || typeof haversineKm !== "function") {
+        return { level: "NONE", points: 0, labels: [] };
+    }
+
+    let best = 0;
+    const labels = [];
+
+    function consider(pLat, pLng, level, label) {
+        if (pLat == null || pLng == null) return;
+        if (haversineKm({ lat: lat, lng: lng }, { lat: pLat, lng: pLng }) > SOS_RISK_RADIUS_KM) return;
+        const weight = level === "CRITICAL" ? 4 : level === "HIGH" ? 3 : level === "MEDIUM" ? 2 : 1;
+        if (weight > best) best = weight;
+        if (labels.indexOf(label) === -1) labels.push(label);
+    }
+
+    (demoRiskPoints || []).forEach(function (risk) {
+        consider(risk.lat, risk.lng, normalizeSeverity(risk.level), risk.label || "risk point");
+    });
+
+    getSavedIncidents().forEach(function (incident) {
+        if (incident.status === "RESOLVED") return;
+        consider(incident.latitude, incident.longitude,
+            normalizeSeverity(incident.severity), incident.type || "incident");
+    });
+
+    const levels = { 0: "NONE", 1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL" };
+    return { level: levels[best], points: best * 3, labels: labels.slice(0, 3) };
+}
+
+function calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description, location) {
+    const reasons = [];
+    const breakdown = [];
+    let score = 0;
+
+    // 1. Emergency / disaster type (severity of the request itself)
+    const typeScore = SOS_EMERGENCY_BASE_SCORE[emergencyType] || 10;
+    score += typeScore;
+    breakdown.push("Emergency type (" + (emergencyType || "Other") + "): +" + typeScore);
+    if (emergencyType === "Medical Emergency") reasons.push("medical emergency");
+    else if (typeScore >= 35) reasons.push("severe emergency type (" + emergencyType + ")");
+
+    // 2. Number of people affected
+    const people = parseInt(peopleAffected, 10) || 0;
+    let peopleScore = 0;
+    if (people >= 20) peopleScore = 20;
+    else if (people >= 10) peopleScore = 15;
+    else if (people >= 5) peopleScore = 10;
+    else if (people >= 2) peopleScore = 5;
+    score += peopleScore;
+    breakdown.push("People affected (" + people + "): +" + peopleScore);
+    if (people >= 10) reasons.push(people + " people affected");
+
+    // 3. Vulnerable people (elderly, disability, pregnant, child)
+    const vulns = vulnerabilities || [];
+    let vulnScore = 0;
+    vulns.forEach(function (v) { vulnScore += SOS_VULNERABILITY_WEIGHT[v] || 5; });
+    vulnScore = Math.min(vulnScore, 25);
+    score += vulnScore;
+    breakdown.push("Vulnerable people (" + (vulns.length || 0) + "): +" + vulnScore);
+    if (vulns.length) {
+        reasons.push(vulns.map(function (v) {
+            return SOS_VULNERABILITY_LABEL[v] || v.toLowerCase();
+        }).join(", "));
+    }
+
+    // 4. Urgency signals in the free-text description
     const lowerDescription = (description || "").toLowerCase();
-    const hasUrgentKeyword = URGENT_KEYWORDS.some(function (keyword) {
+    const matchedKeywords = URGENT_KEYWORDS.filter(function (keyword) {
         return lowerDescription.indexOf(keyword) !== -1;
     });
-    if (hasUrgentKeyword) score += 10;
+    const keywordScore = Math.min(matchedKeywords.length * 6, 12);
+    score += keywordScore;
+    breakdown.push("Urgency keywords (" + matchedKeywords.length + "): +" + keywordScore);
+    if (matchedKeywords.length) reasons.push('report mentions "' + matchedKeywords[0] + '"');
+
+    // 5. Nearby disaster risk from the existing risk / incident data
+    const nearbyRisk = location ? getNearbySOSRisk(location.lat, location.lng)
+        : { level: "NONE", points: 0, labels: [] };
+    score += nearbyRisk.points;
+    breakdown.push("Nearby disaster risk (" + nearbyRisk.level + "): +" + nearbyRisk.points);
+    if (nearbyRisk.points > 0) {
+        reasons.push("nearby " + nearbyRisk.level.toLowerCase() + " risk area" +
+            (nearbyRisk.labels.length ? " (" + nearbyRisk.labels.join(", ") + ")" : ""));
+    }
 
     score = clamp(Math.round(score), 0, 100);
 
     let priorityLevel;
-    if (score >= 80) priorityLevel = "CRITICAL";
-    else if (score >= 60) priorityLevel = "HIGH";
-    else if (score >= 40) priorityLevel = "MEDIUM";
+    if (score >= 75) priorityLevel = "CRITICAL";
+    else if (score >= 55) priorityLevel = "HIGH";
+    else if (score >= 35) priorityLevel = "MEDIUM";
     else priorityLevel = "LOW";
 
-    return { priorityScore: score, priorityLevel: priorityLevel };
+    const priorityReason = reasons.length
+        ? priorityLevel + ": " + reasons.slice(0, 3).join(" + ") + "."
+        : priorityLevel + ": no escalating factors detected.";
+
+    return {
+        priorityScore: score,
+        priorityLevel: priorityLevel,
+        priorityReason: priorityReason,
+        priorityFactors: breakdown,
+        nearbyRiskLevel: nearbyRisk.level
+    };
 }
+
+// Existing records saved before this upgrade have no stored explanation, so
+// recompute one from the data already on the record.
+function getSOSPriorityReason(record) {
+    if (record.priorityReason) return record.priorityReason;
+    const location = (record.latitude != null && record.longitude != null)
+        ? { lat: record.latitude, lng: record.longitude } : null;
+    return calculateSOSPriority(record.emergencyType, record.peopleAffected,
+        record.vulnerabilities, record.description, location).priorityReason;
+}
+
+// Small explanation block shown only for CRITICAL / HIGH requests.
+function sosPriorityExplanationHTML(record) {
+    const level = record.priorityLevel;
+    if (level !== "CRITICAL" && level !== "HIGH") return "";
+    return '<p class="sos-priority-why">🧠 ' + escapeHTML(getSOSPriorityReason(record)) + "</p>";
+}
+
 
 function getSOSPriorityRank(level) {
     const order = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
@@ -1489,7 +1609,8 @@ function renderSOSList() {
             '<div class="incident-card severity-' + record.priorityLevel.toLowerCase() + '">' +
             "<strong>" + escapeHTML(record.id) + "</strong>" +
             "<p><b>Type:</b> " + escapeHTML(record.emergencyType) + "</p>" +
-            "<p><b>Priority:</b> " + escapeHTML(record.priorityLevel) + " (" + escapeHTML(record.priorityScore) + ")</p>" +
+            "<p><b>Priority:</b> " + escapeHTML(record.priorityLevel) + " (score " + escapeHTML(record.priorityScore) + "/100)</p>" +
+            sosPriorityExplanationHTML(record) +
             "<p><b>People affected:</b> " + escapeHTML(record.peopleAffected) + "</p>" +
             "<p><b>Status:</b> " + escapeHTML(record.status) + "</p>" +
             "</div>"
@@ -1536,7 +1657,7 @@ async function submitSOS() {
         return;
     }
 
-    const priority = calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description);
+    const priority = calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description, sosLocation);
 
     const record = {
         id: generateId("SOS"),
@@ -1548,6 +1669,9 @@ async function submitSOS() {
         longitude: sosLocation.lng,
         priorityScore: priority.priorityScore,
         priorityLevel: priority.priorityLevel,
+        priorityReason: priority.priorityReason,
+        priorityFactors: priority.priorityFactors,
+        nearbyRiskLevel: priority.nearbyRiskLevel,
         status: "OPEN",
         timestamp: nowISO(),
         supabaseId: null,
@@ -1561,8 +1685,8 @@ async function submitSOS() {
 
     if (statusEl) {
         statusEl.textContent =
-            "✅ SOS " + record.id + " sent. Priority " + record.priorityLevel +
-            " (score " + record.priorityScore + "). This is decision support only — " +
+            "✅ SOS " + record.id + " sent. " + record.priorityReason +
+            " (rule-based score " + record.priorityScore + "/100). This is decision support only — " +
             "also contact local emergency services if you can.";
     }
 
@@ -2015,7 +2139,8 @@ function renderSOSQueue() {
             '<div class="incident-card severity-' + s.priorityLevel.toLowerCase() + '">' +
             "<strong>" + escapeHTML(s.id) + "</strong>" +
             "<p><b>Type:</b> " + escapeHTML(s.emergencyType) + "</p>" +
-            "<p><b>Priority:</b> " + escapeHTML(s.priorityLevel) + " (" + escapeHTML(s.priorityScore) + ")</p>" +
+            "<p><b>Priority:</b> " + escapeHTML(s.priorityLevel) + " (score " + escapeHTML(s.priorityScore) + "/100)</p>" +
+            sosPriorityExplanationHTML(s) +
             "<p><b>People affected:</b> " + escapeHTML(s.peopleAffected) + "</p>" +
             "<p><b>Location:</b> " + escapeHTML(formatLatLng(s.latitude, s.longitude)) + "</p>" +
             "<p><b>Reported:</b> " + escapeHTML(formatTime(s.timestamp)) + "</p>" +

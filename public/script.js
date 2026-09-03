@@ -396,6 +396,360 @@ function getRouteStyleForScore(score) {
     return { color: "#dc2626", label: "High-risk route" };
 }
 
+/* --------------------------------------------------------------------------
+   6a. GEOMETRY HELPERS (Haversine + point-to-segment distance)
+   -------------------------------------------------------------------------- */
+
+function toRadians(deg) {
+    return (deg * Math.PI) / 180;
+}
+
+// Great-circle distance between two {lat,lng} points, in kilometres.
+function haversineKm(a, b) {
+    if (!a || !b) return Infinity;
+    const R = 6371;
+    const dLat = toRadians(b.lat - a.lat);
+    const dLng = toRadians(b.lng - a.lng);
+    const lat1 = toRadians(a.lat);
+    const lat2 = toRadians(b.lat);
+    const h =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// Shortest distance (km) from a point to the segment A-B, using a local
+// equirectangular projection. Accurate enough at city / district scale.
+function pointToSegmentKm(point, a, b) {
+    const R = 6371;
+    const latRef = toRadians((a.lat + b.lat) / 2);
+
+    function project(p) {
+        return {
+            x: R * toRadians(p.lng) * Math.cos(latRef),
+            y: R * toRadians(p.lat)
+        };
+    }
+
+    const P = project(point);
+    const A = project(a);
+    const B = project(b);
+
+    const dx = B.x - A.x;
+    const dy = B.y - A.y;
+    const lenSq = dx * dx + dy * dy;
+
+    if (lenSq === 0) {
+        return haversineKm(point, a);
+    }
+
+    let t = ((P.x - A.x) * dx + (P.y - A.y) * dy) / lenSq;
+    t = clamp(t, 0, 1);
+
+    const cx = A.x + t * dx;
+    const cy = A.y + t * dy;
+
+    return Math.sqrt((P.x - cx) * (P.x - cx) + (P.y - cy) * (P.y - cy));
+}
+
+// Shortest distance (km) from a point to a polyline of {lat,lng} coordinates.
+function distanceToRouteKm(point, coords) {
+    if (!coords || coords.length === 0) return Infinity;
+    if (coords.length === 1) return haversineKm(point, coords[0]);
+
+    let best = Infinity;
+    for (let i = 0; i < coords.length - 1; i++) {
+        const d = pointToSegmentKm(point, coords[i], coords[i + 1]);
+        if (d < best) best = d;
+    }
+    return best;
+}
+
+/* --------------------------------------------------------------------------
+   6b. HAZARD COLLECTION AND ROUTE RISK SCORING
+   -------------------------------------------------------------------------- */
+
+// Distance from the route line within which a hazard is considered relevant.
+const HAZARD_CORRIDOR_KM = 1.5;
+
+const HAZARD_SEVERITY_WEIGHT = {
+    CRITICAL: 30,
+    HIGH: 20,
+    MEDIUM: 10,
+    LOW: 5
+};
+
+function normalizeSeverity(value) {
+    const text = String(value || "").toUpperCase();
+    if (text.indexOf("CRITICAL") !== -1) return "CRITICAL";
+    if (text.indexOf("HIGH") !== -1) return "HIGH";
+    if (text.indexOf("MEDIUM") !== -1 || text.indexOf("MODERATE") !== -1) return "MEDIUM";
+    return "LOW";
+}
+
+// Builds the live hazard list from data the app already stores:
+// reported incidents, HIGH/CRITICAL SOS requests and analysed risk points.
+function collectRouteHazards() {
+    const hazards = [];
+
+    getSavedIncidents().forEach(function (incident) {
+        if (incident.status === "RESOLVED") return;
+        const lat = parseFloat(incident.latitude);
+        const lng = parseFloat(incident.longitude);
+        if (isNaN(lat) || isNaN(lng)) return;
+
+        hazards.push({
+            source: "Incident",
+            type: incident.type || "Incident",
+            severity: normalizeSeverity(incident.severity),
+            lat: lat,
+            lng: lng,
+            label: (incident.type || "Incident") + " (" + (incident.id || "incident") + ")"
+        });
+    });
+
+    getSavedSOS().forEach(function (record) {
+        if (record.status === "RESOLVED") return;
+        const severity = normalizeSeverity(record.priorityLevel);
+        if (severity !== "HIGH" && severity !== "CRITICAL") return;
+
+        const lat = parseFloat(record.latitude);
+        const lng = parseFloat(record.longitude);
+        if (isNaN(lat) || isNaN(lng)) return;
+
+        hazards.push({
+            source: "SOS",
+            type: record.emergencyType || "SOS",
+            severity: severity,
+            lat: lat,
+            lng: lng,
+            label: "SOS: " + (record.emergencyType || "Emergency") + " (" + (record.id || "sos") + ")"
+        });
+    });
+
+    demoRiskPoints.forEach(function (risk) {
+        hazards.push({
+            source: "Risk point",
+            type: risk.label || "Risk point",
+            severity: normalizeSeverity(risk.level),
+            lat: risk.lat,
+            lng: risk.lng,
+            label: risk.label || "Risk point"
+        });
+    });
+
+    return hazards;
+}
+
+// Transparent scoring: every hazard near the route contributes its severity
+// weight, scaled down as it gets further from the route line.
+function scoreRouteHazards(hazards) {
+    let penalty = 0;
+
+    hazards.forEach(function (hazard) {
+        const weight = HAZARD_SEVERITY_WEIGHT[hazard.severity] || 5;
+        const proximityFactor = clamp(1 - (hazard.distanceKm / HAZARD_CORRIDOR_KM), 0.2, 1);
+        penalty += weight * proximityFactor;
+    });
+
+    const riskScore = clamp(Math.round(penalty), 0, 100);
+
+    let riskLevel = "LOW";
+    if (riskScore >= 70) riskLevel = "CRITICAL";
+    else if (riskScore >= 40) riskLevel = "HIGH";
+    else if (riskScore >= 15) riskLevel = "MEDIUM";
+
+    return { riskScore: riskScore, riskLevel: riskLevel };
+}
+
+// Analyses one genuine OSRM route object. No statistics are invented:
+// distance and duration come from OSRM, hazards from stored app data.
+function buildRouteAnalysis(route, index) {
+    const coords = (route.geometry && route.geometry.coordinates ? route.geometry.coordinates : [])
+        .map(function (pair) {
+            return { lat: pair[1], lng: pair[0] };
+        });
+
+    const analysis = {
+        index: index,
+        coords: coords,
+        distanceKm: (route.distance || 0) / 1000,
+        durationMin: (route.duration || 0) / 60
+    };
+
+    return analyseStoredRoute(analysis);
+}
+
+// Recomputes hazards / risk for an already-stored route geometry.
+function analyseStoredRoute(analysis) {
+    const nearby = [];
+
+    collectRouteHazards().forEach(function (hazard) {
+        const distanceKm = distanceToRouteKm({ lat: hazard.lat, lng: hazard.lng }, analysis.coords);
+        if (distanceKm <= HAZARD_CORRIDOR_KM) {
+            nearby.push(Object.assign({}, hazard, { distanceKm: distanceKm }));
+        }
+    });
+
+    nearby.sort(function (a, b) { return a.distanceKm - b.distanceKm; });
+
+    const scored = scoreRouteHazards(nearby);
+
+    const types = [];
+    nearby.forEach(function (hazard) {
+        if (types.indexOf(hazard.type) === -1) types.push(hazard.type);
+    });
+
+    analysis.hazards = nearby;
+    analysis.hazardTypes = types;
+    analysis.riskScore = scored.riskScore;
+    analysis.riskLevel = scored.riskLevel;
+    analysis.riskLabel = "Risk " + scored.riskLevel + " (" + scored.riskScore + "/100)";
+    analysis.hasSeriousHazard = nearby.some(function (hazard) {
+        return hazard.severity === "HIGH" || hazard.severity === "CRITICAL";
+    });
+    analysis.safetyScore = clamp(100 - scored.riskScore, 0, 100);
+
+    return analysis;
+}
+
+// Prefers the lowest-risk genuine alternative; ties break on travel time.
+function pickSaferRouteIndex(analyses) {
+    if (!analyses || !analyses.length) return 0;
+
+    let bestIndex = 0;
+    for (let i = 1; i < analyses.length; i++) {
+        const current = analyses[i];
+        const best = analyses[bestIndex];
+        if (
+            current.riskScore < best.riskScore ||
+            (current.riskScore === best.riskScore && current.durationMin < best.durationMin)
+        ) {
+            bestIndex = i;
+        }
+    }
+    return bestIndex;
+}
+
+function drawRouteAnalysis(analysis) {
+    if (!map || !analysis || !analysis.coords.length) return;
+
+    clearCurrentRoute();
+
+    const style = getRouteStyleForScore(analysis.safetyScore);
+
+    currentRouteLine = L.polyline(
+        analysis.coords.map(function (p) { return [p.lat, p.lng]; }),
+        { color: style.color, weight: 5, opacity: 0.85 }
+    ).addTo(map);
+
+    map.fitBounds(currentRouteLine.getBounds(), { padding: [30, 30] });
+
+    calculateAccessibilityScore(analysis.distanceKm, analysis.durationMin);
+    setText("dashboard-risk", analysis.riskLevel);
+    setText("risk", analysis.riskLevel + " (" + analysis.hazards.length + " hazard(s))");
+}
+
+/* --------------------------------------------------------------------------
+   6c. ROUTE INTELLIGENCE RENDERING + LIVE UPDATES
+   -------------------------------------------------------------------------- */
+
+function routeSummaryHTML(analysis, title) {
+    if (!analysis) return "";
+
+    const typesText = analysis.hazardTypes.length
+        ? analysis.hazardTypes.map(escapeHTML).join(", ")
+        : "None detected";
+
+    return (
+        '<div class="route-summary">' +
+        "<h4>" + escapeHTML(title) + "</h4>" +
+        "<p><b>Distance:</b> " + analysis.distanceKm.toFixed(1) + " km</p>" +
+        "<p><b>ETA:</b> " + Math.round(analysis.durationMin) + " min</p>" +
+        "<p><b>Risk score:</b> " + analysis.riskScore + "/100</p>" +
+        "<p><b>Risk level:</b> " + escapeHTML(analysis.riskLevel) + "</p>" +
+        "<p><b>Hazards near route:</b> " + analysis.hazards.length + "</p>" +
+        "<p><b>Hazard types:</b> " + typesText + "</p>" +
+        "</div>"
+    );
+}
+
+function renderRouteIntelligence() {
+    const resultEl = byId("routeResult");
+    const panelEl = byId("route-intel-panel");
+
+    if (!lastRouteAnalyses.length) {
+        const empty =
+            "No route has been calculated yet. Open the Dashboard map, select a start point, " +
+            "search a destination and click “Find Accessible Route”.";
+        if (resultEl) resultEl.textContent = empty;
+        if (panelEl) panelEl.innerHTML = "<p>" + empty + "</p>";
+        return;
+    }
+
+    const fastest = lastRouteAnalyses.reduce(function (best, item) {
+        return item.durationMin < best.durationMin ? item : best;
+    }, lastRouteAnalyses[0]);
+
+    const safest = lastRouteAnalyses[pickSaferRouteIndex(lastRouteAnalyses)];
+    const selected = lastRouteAnalyses[selectedRouteAnalysisIndex] || safest;
+
+    let html = "";
+
+    if (selected.hasSeriousHazard) {
+        html +=
+            '<p class="route-warning">⚠️ Serious hazard detected near this route — ' +
+            escapeHTML(selected.hazards[0].label) + " about " +
+            selected.hazards[0].distanceKm.toFixed(1) + " km from the road.</p>";
+    }
+
+    html += routeSummaryHTML(fastest, "⚡ Fastest Route (OSRM)");
+    html += routeSummaryHTML(selected, "🛡️ Safety Analysis (selected route)");
+    html += routeSummaryHTML(selected, "♿ Accessible Route (in use)");
+
+    if (lastRouteAnalyses.length > 1 && safest.index !== fastest.index) {
+        html +=
+            '<p class="route-note">A genuine OSRM alternative with a lower risk score is available ' +
+            "and has been selected (risk " + safest.riskScore + "/100 vs " + fastest.riskScore + "/100).</p>";
+    } else if (lastRouteAnalyses.length > 1) {
+        html +=
+            '<p class="route-note">OSRM returned ' + lastRouteAnalyses.length +
+            " alternatives; the current route already has the lowest risk score.</p>";
+    } else {
+        html +=
+            '<p class="route-note">OSRM returned only one route for this pair of points, so no ' +
+            "alternative exists. The safety analysis above applies to that single route.</p>";
+    }
+
+    if (resultEl) resultEl.innerHTML = html;
+    if (panelEl) panelEl.innerHTML = html;
+}
+
+// Re-runs hazard detection for already-calculated routes whenever incidents,
+// SOS records or risk points change. Never re-requests OSRM.
+function updateRouteRiskAnalysis() {
+    if (!lastRouteAnalyses.length) {
+        renderRouteIntelligence();
+        return;
+    }
+
+    lastRouteAnalyses = lastRouteAnalyses.map(function (analysis) {
+        return analyseStoredRoute(analysis);
+    });
+
+    selectedRouteAnalysisIndex = pickSaferRouteIndex(lastRouteAnalyses);
+
+    const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
+    if (chosen) {
+        setText("dashboard-risk", chosen.riskLevel);
+        drawRouteAnalysis(chosen);
+    }
+
+    renderRouteIntelligence();
+}
+
+
+
 async function findAccessibleRoute() {
     if (!selectedStart) {
         setText("route-status", "Please select a starting location on the map first.");

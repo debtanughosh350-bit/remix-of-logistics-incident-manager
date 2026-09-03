@@ -1685,8 +1685,8 @@ async function submitSOS() {
 
     if (statusEl) {
         statusEl.textContent =
-            "✅ SOS " + record.id + " sent. Priority " + record.priorityLevel +
-            " (score " + record.priorityScore + "). This is decision support only — " +
+            "✅ SOS " + record.id + " sent. " + record.priorityReason +
+            " (rule-based score " + record.priorityScore + "/100). This is decision support only — " +
             "also contact local emergency services if you can.";
     }
 

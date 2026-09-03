@@ -1230,3 +1230,33 @@ button,
     margin-bottom: 18px;
     border-radius: 10px;
 }
+
+/* Route risk analysis (additive, matches existing card styling) */
+.route-summary {
+    border-top: 1px solid rgba(148, 163, 184, 0.25);
+    padding: 10px 0 2px;
+}
+.route-summary:first-child {
+    border-top: none;
+}
+.route-summary h4 {
+    margin: 0 0 6px;
+    font-size: 0.95rem;
+}
+.route-summary p {
+    margin: 2px 0;
+    font-size: 0.88rem;
+}
+.route-warning {
+    background: rgba(220, 38, 38, 0.12);
+    border-left: 3px solid #dc2626;
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin: 0 0 10px;
+    font-size: 0.88rem;
+}
+.route-note {
+    margin: 10px 0 0;
+    font-size: 0.82rem;
+    opacity: 0.85;
+}

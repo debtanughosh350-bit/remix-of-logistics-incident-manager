@@ -1657,7 +1657,7 @@ async function submitSOS() {
         return;
     }
 
-    const priority = calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description);
+    const priority = calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description, sosLocation);
 
     const record = {
         id: generateId("SOS"),
@@ -1669,6 +1669,9 @@ async function submitSOS() {
         longitude: sosLocation.lng,
         priorityScore: priority.priorityScore,
         priorityLevel: priority.priorityLevel,
+        priorityReason: priority.priorityReason,
+        priorityFactors: priority.priorityFactors,
+        nearbyRiskLevel: priority.nearbyRiskLevel,
         status: "OPEN",
         timestamp: nowISO(),
         supabaseId: null,

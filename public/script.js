@@ -2139,7 +2139,8 @@ function renderSOSQueue() {
             '<div class="incident-card severity-' + s.priorityLevel.toLowerCase() + '">' +
             "<strong>" + escapeHTML(s.id) + "</strong>" +
             "<p><b>Type:</b> " + escapeHTML(s.emergencyType) + "</p>" +
-            "<p><b>Priority:</b> " + escapeHTML(s.priorityLevel) + " (" + escapeHTML(s.priorityScore) + ")</p>" +
+            "<p><b>Priority:</b> " + escapeHTML(s.priorityLevel) + " (score " + escapeHTML(s.priorityScore) + "/100)</p>" +
+            sosPriorityExplanationHTML(s) +
             "<p><b>People affected:</b> " + escapeHTML(s.peopleAffected) + "</p>" +
             "<p><b>Location:</b> " + escapeHTML(formatLatLng(s.latitude, s.longitude)) + "</p>" +
             "<p><b>Reported:</b> " + escapeHTML(formatTime(s.timestamp)) + "</p>" +

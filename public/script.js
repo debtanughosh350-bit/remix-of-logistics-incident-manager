@@ -62,6 +62,11 @@ let resourceMarkers = [];
 let vehicleMarkers = [];
 let demoVehicles = [];
 
+let lastRouteAnalyses = [];   // analysed OSRM alternatives (real API results only)
+let selectedRouteAnalysisIndex = 0;
+let lastRouteRequest = null;  // { start, end }
+let demoRiskPoints = [];      // risk points created by showRiskPoints()
+
 let alertsCache = [];
 let currentAlertFilter = "all";
 let alertFiltersBound = false;
@@ -468,7 +473,7 @@ async function findAccessibleRoute() {
 }
 
 async function searchDestination() {
-    const inputEl = byId("destination-input");
+    const inputEl = byId("destination-input") || byId("destination");
     const query = inputEl ? inputEl.value.trim() : "";
 
     if (!query) {
@@ -629,6 +634,7 @@ function showRiskPoints() {
 
     // Clear previous risk markers first so repeated clicks never stack duplicates.
     clearRiskMarkers();
+    demoRiskPoints = [];
 
     if (!map) {
         return;
@@ -649,7 +655,10 @@ function showRiskPoints() {
             .bindPopup("<b>⚠️ " + escapeHTML(risk.label) + "</b><br>Risk level: " + escapeHTML(risk.level));
 
         riskMarkers.push(marker);
+        demoRiskPoints.push({ lat: lat, lng: lng, label: risk.label, level: risk.level });
     });
+
+    updateRouteRiskAnalysis();
 
     setText("route-status", "Demo risk points displayed around the selected location.");
 }
@@ -767,6 +776,7 @@ function loadIncidents() {
     const incidents = getSavedIncidents();
     incidents.forEach(displayIncidentOnMap);
     renderIncidentList();
+    updateRouteRiskAnalysis();
     return incidents;
 }
 
@@ -1140,6 +1150,7 @@ function loadSOS() {
     const records = getSavedSOS();
     records.forEach(displaySOSOnMap);
     renderSOSList();
+    updateRouteRiskAnalysis();
     return records;
 }
 

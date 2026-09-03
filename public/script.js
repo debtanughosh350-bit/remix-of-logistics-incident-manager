@@ -1459,8 +1459,8 @@ function calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, de
     const typeScore = SOS_EMERGENCY_BASE_SCORE[emergencyType] || 10;
     score += typeScore;
     breakdown.push("Emergency type (" + (emergencyType || "Other") + "): +" + typeScore);
-    if (typeScore >= 35) reasons.push("severe emergency type (" + emergencyType + ")");
     if (emergencyType === "Medical Emergency") reasons.push("medical emergency");
+    else if (typeScore >= 35) reasons.push("severe emergency type (" + emergencyType + ")");
 
     // 2. Number of people affected
     const people = parseInt(peopleAffected, 10) || 0;

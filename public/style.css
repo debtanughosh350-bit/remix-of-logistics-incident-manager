@@ -1388,3 +1388,59 @@ button,
     border-top: 1px solid #e2e8f0;
     padding-top: 14px;
 }
+
+/* ==============================
+   MAP RELIABILITY (additive)
+   ============================== */
+
+/* Always give the map a real height; a light base colour shows while tiles
+   download so the panel never looks broken or white. */
+#map {
+    height: 380px;
+    min-height: 320px;
+    width: 100%;
+    position: relative;
+    background: #dceaf3;
+    z-index: 0;
+    isolation: isolate;
+}
+
+/* Leaflet panes must never be clipped or stacked above dropdowns/header. */
+#map.leaflet-container {
+    font: inherit;
+}
+
+#map .leaflet-tile {
+    /* prevents faint seams between tiles on fractional-zoom / retina screens */
+    image-rendering: auto;
+    backface-visibility: hidden;
+}
+
+#map .leaflet-control-zoom a {
+    color: #102a43;
+    font-weight: 700;
+}
+
+#map .leaflet-control-zoom a:hover {
+    background: #1d4e89;
+    color: #ffffff;
+}
+
+/* Popup buttons inherit the app's navy look */
+#map .leaflet-popup-content button {
+    margin-top: 6px;
+}
+
+@media (max-width: 768px) {
+    #map {
+        height: 320px;
+        min-height: 280px;
+    }
+}
+
+@media (max-width: 480px) {
+    #map {
+        height: 280px;
+        min-height: 240px;
+    }
+}

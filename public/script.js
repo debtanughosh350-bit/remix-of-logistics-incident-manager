@@ -2821,6 +2821,9 @@ async function initApp() {
 
     try {
         await loadVehicles();
+        // Vehicles load asynchronously, so re-render the SOS views once the
+        // fleet is known and assignment controls can be offered.
+        refreshDispatchViews();
     } catch (error) {
         console.error("Vehicle loading failed:", error);
     }

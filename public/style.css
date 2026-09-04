@@ -1271,3 +1271,9 @@ button,
     font-size: 0.82rem;
     line-height: 1.35;
 }
+
+/* Rescue dispatch line (additive) */
+.sos-dispatch-line {
+    margin: 6px 0 2px;
+    font-weight: bold;
+}

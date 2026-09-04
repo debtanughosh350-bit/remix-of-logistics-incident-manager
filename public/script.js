@@ -1614,6 +1614,7 @@ function renderSOSList() {
             sosPriorityExplanationHTML(record) +
             "<p><b>People affected:</b> " + escapeHTML(record.peopleAffected) + "</p>" +
             "<p><b>Status:</b> " + escapeHTML(record.status) + "</p>" +
+            sosDispatchHTML(record, false) +
             "</div>"
         );
     }).join("");
@@ -1706,6 +1707,9 @@ async function updateSOSStatus(id, newStatus) {
 
     record.status = newStatus;
     saveToStorage(STORAGE_KEYS.SOS, records);
+
+    // A resolved SOS releases its vehicle back to the available pool.
+    if (newStatus === "RESOLVED") completeDispatchForSOS(id);
 
     loadSOS();
     loadRescueDashboard();
@@ -2148,7 +2152,7 @@ function renderSOSQueue() {
             '<div class="queue-actions">' +
             '<select onchange="updateSOSStatus(\'' + s.id + '\', this.value)">' + opt("OPEN") + opt("IN PROGRESS") + opt("RESOLVED") + "</select>" +
             '<button onclick="focusSOSOnMap(\'' + s.id + '\')">📍 View on Map</button>' +
-            "</div></div>"
+            "</div>" + sosDispatchHTML(s, true) + "</div>"
         );
     }).join("");
 }
@@ -2857,6 +2861,10 @@ window.getSOSLocation = getSOSLocation;
 window.submitSOS = submitSOS;
 window.updateSOSStatus = updateSOSStatus;
 window.focusSOSOnMap = focusSOSOnMap;
+
+window.assignVehicleToSOS = assignVehicleToSOS;
+window.updateDispatchStatus = updateDispatchStatus;
+window.completeDispatch = completeDispatch;
 
 window.useSelectedResourceLocation = useSelectedResourceLocation;
 window.getResourceLocation = getResourceLocation;

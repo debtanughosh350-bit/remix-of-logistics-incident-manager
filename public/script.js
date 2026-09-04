@@ -2484,11 +2484,13 @@ function renderVehiclesTable(vehicles) {
     if (!tbody) return;
 
     if (!vehicles.length) {
-        tbody.innerHTML = '<tr><td colspan="7">No vehicles available.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9">No vehicles available.</td></tr>';
         return;
     }
 
     tbody.innerHTML = vehicles.map(function (v) {
+        const dispatch = getDispatchForVehicle(v.id);
+        const assignment = dispatch ? dispatch.sosId : (isVehicleUnderMaintenance(v) ? "Maintenance" : "Unassigned");
         return (
             "<tr>" +
             "<td>" + escapeHTML(v.id) + "</td>" +
@@ -2496,6 +2498,8 @@ function renderVehiclesTable(vehicles) {
             "<td>" + escapeHTML(v.location) + "</td>" +
             "<td>" + escapeHTML(v.destination) + "</td>" +
             "<td>" + escapeHTML(v.status) + "</td>" +
+            "<td>" + escapeHTML(assignment) + "</td>" +
+            "<td>" + escapeHTML(vehicleDispatchStatus(v)) + "</td>" +
             "<td>" + escapeHTML(v.routeStatus) + "</td>" +
             "<td>" + escapeHTML(formatTime(v.lastUpdated)) + "</td>" +
             "</tr>"

@@ -749,6 +749,8 @@ function updateRouteRiskAnalysis() {
     }
 
     renderRouteIntelligence();
+    renderRouteKPIs();
+    renderReports();
 }
 
 
@@ -2118,7 +2120,171 @@ function calculateDashboardKPIs() {
     setText("kpi-food-shortage", kpis.foodShortage);
     setText("kpi-medicine-shortage", kpis.medicineShortage);
 
+    renderRouteKPIs();
+    renderVehicleKPIs();
+    renderReports();
+
     return kpis;
+}
+
+/* --------------------------------------------------------------------------
+   12b. LIVE KPIs FOR DASHBOARD / VEHICLES / REPORTS
+   Every number below is derived from data already stored by this prototype
+   (incidents, SOS, dispatch records, resources, analysed routes).
+   -------------------------------------------------------------------------- */
+
+const BLOCKAGE_KEYWORDS = ["block", "landslide", "collapse", "closed"];
+
+function getRouteKPIs() {
+    const analyses = lastRouteAnalyses || [];
+
+    const blocked = analyses.filter(function (a) {
+        return (a.hazards || []).some(function (h) {
+            const text = ((h.type || "") + " " + (h.label || "")).toLowerCase();
+            return BLOCKAGE_KEYWORDS.some(function (k) { return text.indexOf(k) !== -1; });
+        });
+    }).length;
+
+    const highRisk = analyses.filter(function (a) {
+        return a.riskLevel === "HIGH" || a.riskLevel === "CRITICAL";
+    }).length;
+
+    return { analysed: analyses.length, blocked: blocked, highRisk: highRisk };
+}
+
+function getVehicleKPIs() {
+    const vehicles = demoVehicles || [];
+    const dispatched = vehicles.filter(function (v) { return !!getDispatchForVehicle(v.id); }).length;
+    const maintenance = vehicles.filter(isVehicleUnderMaintenance).length;
+    const available = vehicles.filter(isVehicleAssignable).length;
+    const utilization = vehicles.length ? Math.round((dispatched / vehicles.length) * 100) : 0;
+
+    return {
+        total: vehicles.length,
+        available: available,
+        dispatched: dispatched,
+        maintenance: maintenance,
+        utilization: utilization
+    };
+}
+
+function renderRouteKPIs() {
+    const route = getRouteKPIs();
+    setText("kpi-active-routes", route.analysed);
+    setText("kpi-blocked-routes", route.blocked);
+    setText("kpi-highrisk-routes", route.highRisk);
+    setText("kpi-active-routes-note", route.analysed
+        ? "Routes analysed in this session"
+        : "No route analysed yet");
+
+    const vehicles = getVehicleKPIs();
+    setText("kpi-dispatched-vehicles", vehicles.dispatched);
+    setText("kpi-dispatched-note", vehicles.dispatched
+        ? "Vehicles assigned to active SOS"
+        : "No active dispatches");
+}
+
+function renderVehicleKPIs() {
+    const v = getVehicleKPIs();
+    setText("kpi-veh-total", v.total);
+    setText("kpi-veh-available", v.available);
+    setText("kpi-veh-dispatched", v.dispatched);
+    setText("kpi-veh-maintenance", v.maintenance);
+}
+
+function renderReports() {
+    const route = getRouteKPIs();
+    const vehicles = getVehicleKPIs();
+    const incidents = getSavedIncidents();
+    const sosRecords = getSavedSOS();
+    const resources = getSavedResources();
+
+    setText("rep-active-routes", route.analysed);
+    setText("rep-blocked-routes", route.blocked);
+    setText("rep-highrisk-routes", route.highRisk);
+    setText("rep-dispatched-vehicles", vehicles.dispatched);
+
+    setText("rep-veh-total", vehicles.total);
+    setText("rep-veh-available", vehicles.available);
+    setText("rep-veh-dispatched", vehicles.dispatched);
+    setText("rep-veh-maintenance", vehicles.maintenance);
+    setText("rep-veh-utilization", vehicles.utilization + "%");
+
+    setText("rep-incidents-total", incidents.length);
+
+    const activeSOS = sosRecords.filter(function (s) { return s.status !== "RESOLVED"; });
+    setText("rep-sos-total", sosRecords.length);
+    setText("rep-sos-active", activeSOS.length);
+    setText("rep-sos-critical-high", activeSOS.filter(function (s) {
+        return s.priorityLevel === "CRITICAL" || s.priorityLevel === "HIGH";
+    }).length);
+
+    const shortages = resources.filter(function (r) {
+        return calculateResourceStatus(r.quantity, r.capacity).status !== "AVAILABLE";
+    }).length;
+    setText("rep-shortages", shortages);
+
+    renderIncidentBreakdown(incidents);
+    renderDispatchBreakdown();
+}
+
+function countBy(records, keyFn) {
+    const counts = {};
+    records.forEach(function (record) {
+        const key = keyFn(record) || "Unspecified";
+        counts[key] = (counts[key] || 0) + 1;
+    });
+    return counts;
+}
+
+function countsTableHTML(title, counts, columnLabel) {
+    const keys = Object.keys(counts);
+    if (!keys.length) return "";
+    return (
+        "<h3>" + escapeHTML(title) + "</h3>" +
+        '<div class="table-wrap"><table class="data-table"><thead><tr><th>' +
+        escapeHTML(columnLabel) + "</th><th>Count</th></tr></thead><tbody>" +
+        keys.map(function (key) {
+            return "<tr><td>" + escapeHTML(key) + "</td><td>" + counts[key] + "</td></tr>";
+        }).join("") +
+        "</tbody></table></div>"
+    );
+}
+
+function renderIncidentBreakdown(incidents) {
+    const el = byId("report-incident-breakdown");
+    if (!el) return;
+
+    if (!incidents.length) {
+        el.innerHTML = '<p class="incident-empty">No active incidents.</p>';
+        return;
+    }
+
+    el.innerHTML =
+        countsTableHTML("Incidents by type", countBy(incidents, function (i) { return i.type; }), "Type") +
+        countsTableHTML("Incidents by severity", countBy(incidents, function (i) { return i.severity; }), "Severity");
+}
+
+function renderDispatchBreakdown() {
+    const el = byId("report-dispatch-breakdown");
+    if (!el) return;
+
+    const active = getActiveDispatches();
+    if (!active.length) {
+        el.innerHTML = '<p class="incident-empty">No active dispatches.</p>';
+        return;
+    }
+
+    el.innerHTML =
+        "<h3>Active dispatches</h3>" +
+        '<div class="table-wrap"><table class="data-table"><thead><tr><th>Vehicle</th><th>Type</th>' +
+        "<th>SOS</th><th>Dispatch status</th><th>Assigned</th></tr></thead><tbody>" +
+        active.map(function (d) {
+            return "<tr><td>" + escapeHTML(d.vehicleId) + "</td><td>" + escapeHTML(d.vehicleType) +
+                "</td><td>" + escapeHTML(d.sosId) + "</td><td>" + escapeHTML(d.dispatchStatus) +
+                "</td><td>" + escapeHTML(formatTime(d.assignedAt)) + "</td></tr>";
+        }).join("") +
+        "</tbody></table></div>";
 }
 
 function renderSOSQueue() {
@@ -2413,6 +2579,7 @@ function refreshDispatchViews() {
     }
     renderSOSList();
     renderSOSQueue();
+    calculateDashboardKPIs();
 }
 
 // Small assignment / dispatch control block reused by the SOS list and queue.

@@ -1277,3 +1277,114 @@ button,
     margin: 6px 0 2px;
     font-weight: bold;
 }
+
+
+/* ==============================
+   MULTILINGUAL ASSISTANT
+   ============================== */
+
+.assist-langs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 18px 0 22px;
+}
+
+.lang-chip {
+    background: #e2e8f0;
+    color: #1f2937;
+    border: none;
+    padding: 9px 16px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background 0.2s, color 0.2s;
+}
+
+.lang-chip:hover {
+    background: #cbd5e1;
+}
+
+.lang-chip.active {
+    background: #102a43;
+    color: white;
+}
+
+.assist-phrases {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+}
+
+.phrase-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.phrase-text {
+    font-size: 17px;
+    font-weight: bold;
+    color: #102a43;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.phrase-en {
+    font-size: 13px;
+    color: #64748b;
+    margin-top: 4px;
+}
+
+.phrase-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.phrase-btn {
+    background: #e2e8f0;
+    color: #1f2937;
+    border: none;
+    padding: 7px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: bold;
+    transition: background 0.2s, color 0.2s;
+}
+
+.phrase-btn:hover {
+    background: #1d4e89;
+    color: white;
+}
+
+.phrase-btn-primary {
+    background: #9b1c1c;
+    color: white;
+}
+
+.phrase-btn-primary:hover {
+    background: #7a1616;
+}
+
+.assist-status {
+    margin-top: 16px;
+    font-size: 14px;
+    color: #1d4e89;
+    min-height: 20px;
+}
+
+.assist-note {
+    margin-top: 22px;
+    font-size: 13px;
+    color: #64748b;
+    line-height: 1.6;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 14px;
+}

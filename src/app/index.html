@@ -33,7 +33,9 @@
             <a href="#" class="nav-item" data-target="view-vehicles" data-subtitle="Live vehicle monitoring">Vehicles</a>
             <a href="#" class="nav-item" data-target="view-incidents"
                 data-subtitle="Report, track and resolve field incidents">Incidents</a>
-            <a href="#" class="nav-item" data-target="view-sos" data-subtitle="Emergency help requests">SOS Help</a>
+<a href="#" class="nav-item" data-target="view-sos" data-subtitle="Emergency help requests">SOS Help</a>
+            <a href="#" class="nav-item" data-target="view-assist"
+                data-subtitle="Emergency phrases in 6 languages">Assist</a>
             <a href="#" class="nav-item" data-target="view-rescue"
                 data-subtitle="Rescue queues, resources and recommendations">Rescue</a>
             <a href="#" class="nav-item" data-target="view-alerts"
@@ -546,6 +548,32 @@
             <section class="incident-section incident-list-wrap">
                 <h3>🆘 SOS Requests</h3>
                 <div id="sos-list"></div>
+            </section>
+
+</div>
+
+
+        <!-- ================= MULTILINGUAL ASSISTANT ================= -->
+        <div id="view-assist" class="view-section">
+
+            <section class="incident-section">
+                <div class="section-title">
+                    <h2>🌐 Multilingual Emergency Assistant</h2>
+                    <p>Emergency phrases in 6 languages — pick a language, tap a phrase to hear it, copy it, or send it
+                        into an SOS request</p>
+                </div>
+
+                <div class="assist-langs" id="assist-langs"></div>
+
+                <div class="assist-phrases" id="assist-phrases"></div>
+
+                <p id="assist-status" class="assist-status"></p>
+
+                <p class="assist-note">
+                    ⚠️ Prototype phrasebook for demo use — translations are community-level and should be verified
+                    with a fluent speaker before real-world use. Speech output uses the voices installed on this
+                    device. Always contact local emergency services.
+                </p>
             </section>
 
         </div>

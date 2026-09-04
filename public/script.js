@@ -3053,3 +3053,339 @@ window.analyzeRoute = function () {
 
 window.updateRouteRiskAnalysis = updateRouteRiskAnalysis;
 window.renderRouteIntelligence = renderRouteIntelligence;
+
+/* ==========================================================================
+   21. MULTILINGUAL EMERGENCY ASSISTANT (prototype phrasebook)
+   ========================================================================== */
+
+var ASSIST_LANGUAGES = [
+    { code: "en", native: "English", bcp47: "en-IN" },
+    { code: "hi", native: "हिन्दी (Hindi)", bcp47: "hi-IN" },
+    { code: "bn", native: "বাংলা (Bengali)", bcp47: "bn-IN" },
+    { code: "as", native: "অসমীয়া (Assamese)", bcp47: "as-IN" },
+    { code: "ne", native: "नेपाली (Nepali)", bcp47: "ne-IN" },
+    { code: "mz", native: "Mizo", bcp47: "lus-IN" }
+];
+
+var ASSIST_PHRASEBOOK = [
+    {
+        en: "Help!",
+        translations: {
+            en: "Help!",
+            hi: "मदद!",
+            bn: "বাঁচান!",
+            as: "বচাও!",
+            ne: "बचाउनुहोस्!",
+            mz: "Tanpui!"
+        }
+    },
+    {
+        en: "I need help",
+        translations: {
+            en: "I need help",
+            hi: "मुझे मदद चाहिए",
+            bn: "আমার সাহায্য দরকার",
+            as: "মোক সহায় লাগে",
+            ne: "मलाई मद्दत चाहियो",
+            mz: "Tanpuina ka mamawh"
+        }
+    },
+    {
+        en: "Medical emergency",
+        suggestedType: "Medical Emergency",
+        translations: {
+            en: "Medical emergency",
+            hi: "मेडिकल इमरजेंसी",
+            bn: "মেডিকেল জরুরি অবস্থা",
+            as: "চিকিৎসা জৰুৰী অৱস্থা",
+            ne: "मेडिकल आपतकालीन",
+            mz: "Damdawi hmanhmawh"
+        }
+    },
+    {
+        en: "There is a flood",
+        suggestedType: "Flood",
+        translations: {
+            en: "There is a flood",
+            hi: "बाढ़ आ गई है",
+            bn: "বন্যা হয়েছে",
+            as: "বানপানী হৈছে",
+            ne: "बाढी आयो",
+            mz: "Tui lian a lo thleng e"
+        }
+    },
+    {
+        en: "There is a fire",
+        translations: {
+            en: "There is a fire",
+            hi: "आग लग गई है",
+            bn: "আগুন লেগেছে",
+            as: "জুই লাগিছে",
+            ne: "आगो लाग्यो",
+            mz: "Mei a lo sen e"
+        }
+    },
+    {
+        en: "Landslide on the road",
+        translations: {
+            en: "Landslide on the road",
+            hi: "सड़क पर भूस्खलन हुआ है",
+            bn: "রাস্তায় ভূমিধস হয়েছে",
+            as: "বাটত ভূমিস্খলন হৈছে",
+            ne: "सडकमा पहिरो गयो",
+            mz: "Kawngah leilak a lo thleng e"
+        }
+    },
+    {
+        en: "The road is blocked",
+        translations: {
+            en: "The road is blocked",
+            hi: "सड़क बंद है",
+            bn: "রাস্তা বন্ধ",
+            as: "বাট বন্ধ হৈ আছে",
+            ne: "सडक बन्द छ",
+            mz: "Kawng a khar a"
+        }
+    },
+    {
+        en: "I need shelter",
+        translations: {
+            en: "I need shelter",
+            hi: "मुझे आश्रय चाहिए",
+            bn: "আমার আশ্রয় দরকার",
+            as: "মোক আশ্ৰয় দৰকাৰ",
+            ne: "मलाई आश्रय चाहियो",
+            mz: "Inhnuar ka mamawh"
+        }
+    },
+    {
+        en: "I need food and water",
+        suggestedType: "Food Required",
+        translations: {
+            en: "I need food and water",
+            hi: "मुझे खाना और पानी चाहिए",
+            bn: "আমার খাবার ও জল দরকার",
+            as: "মোক খোৱা বস্তু আৰু পানী দৰকাৰ",
+            ne: "मलाई खाना र पानी चाहियो",
+            mz: "Chaw leh tui ka mamawh"
+        }
+    },
+    {
+        en: "Please evacuate now",
+        translations: {
+            en: "Please evacuate now",
+            hi: "कृपया अभी खाली करें",
+            bn: "অনুগ্রহ করে এখনই সরে যান",
+            as: "অনুগ্ৰহ কৰি এতিয়াই স্থানান্তৰ হওক",
+            ne: "कृपया अहिले नै सुरक्षित स्थानमा जानुहोस्",
+            mz: "Tûnah hian chhuak rawh u"
+        }
+    },
+    {
+        en: "Stay safe",
+        translations: {
+            en: "Stay safe",
+            hi: "सुरक्षित रहें",
+            bn: "নিরাপদে থাকুন",
+            as: "সুৰক্ষিত থাকক",
+            ne: "सुरक्षित रहनुहोस्",
+            mz: "Him takin awm rawh"
+        }
+    },
+    {
+        en: "Help is on the way",
+        translations: {
+            en: "Help is on the way",
+            hi: "मदद रास्ते में है",
+            bn: "সাহায্য আসছে",
+            as: "সহায় আহি আছে",
+            ne: "मद्दत आउँदै छ",
+            mz: "Tanpuina a lo thleng mek e"
+        }
+    }
+];
+
+var assistLang = "en";
+
+function initAssist() {
+    renderAssistLanguages();
+    renderAssistPhrases();
+}
+
+function getAssistLangName(code) {
+    for (var i = 0; i < ASSIST_LANGUAGES.length; i++) {
+        if (ASSIST_LANGUAGES[i].code === code) return ASSIST_LANGUAGES[i].native;
+    }
+    return "English";
+}
+
+function renderAssistLanguages() {
+    var wrap = byId("assist-langs");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    ASSIST_LANGUAGES.forEach(function (lang) {
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "lang-chip" + (lang.code === assistLang ? " active" : "");
+        chip.textContent = lang.native;
+        chip.setAttribute("data-lang", lang.code);
+        chip.addEventListener("click", function () {
+            assistLang = lang.code;
+            renderAssistLanguages();
+            renderAssistPhrases();
+        });
+        wrap.appendChild(chip);
+    });
+}
+
+function renderAssistPhrases() {
+    var wrap = byId("assist-phrases");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    ASSIST_PHRASEBOOK.forEach(function (phrase) {
+        var card = document.createElement("div");
+        card.className = "phrase-card";
+
+        var main = document.createElement("div");
+        main.className = "phrase-main";
+
+        var text = document.createElement("p");
+        text.className = "phrase-text";
+        text.textContent = phrase.translations[assistLang] || phrase.en;
+
+        var gloss = document.createElement("p");
+        gloss.className = "phrase-en";
+        gloss.textContent = phrase.en;
+
+        main.appendChild(text);
+        main.appendChild(gloss);
+
+        var actions = document.createElement("div");
+        actions.className = "phrase-actions";
+
+        var speak = document.createElement("button");
+        speak.type = "button";
+        speak.className = "phrase-btn";
+        speak.textContent = "🔊 Speak";
+        speak.addEventListener("click", function () {
+            speakPhrase(assistLang, phrase.translations[assistLang] || phrase.en);
+        });
+
+        var copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "phrase-btn";
+        copy.textContent = "📋 Copy";
+        copy.addEventListener("click", function () {
+            copyAssistPhrase(phrase, assistLang);
+        });
+
+        var use = document.createElement("button");
+        use.type = "button";
+        use.className = "phrase-btn phrase-btn-primary";
+        use.textContent = "🆘 Use in SOS";
+        use.addEventListener("click", function () {
+            useAssistPhraseInSOS(phrase, assistLang);
+        });
+
+        actions.appendChild(speak);
+        actions.appendChild(copy);
+        actions.appendChild(use);
+        card.appendChild(main);
+        card.appendChild(actions);
+        wrap.appendChild(card);
+    });
+}
+
+function speakPhrase(langCode, text) {
+    if (!("speechSynthesis" in window)) {
+        setAssistStatus("Speech is not supported on this device/browser.");
+        return;
+    }
+    var bcp47 = "en-IN";
+    for (var i = 0; i < ASSIST_LANGUAGES.length; i++) {
+        if (ASSIST_LANGUAGES[i].code === langCode) bcp47 = ASSIST_LANGUAGES[i].bcp47;
+    }
+    window.speechSynthesis.cancel();
+    var utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = bcp47;
+    utterance.rate = 0.95;
+    var baseLang = bcp47.split("-")[0].toLowerCase();
+    var voices = window.speechSynthesis.getVoices();
+    var preferred = null;
+    for (var v = 0; v < voices.length; v++) {
+        if (voices[v].lang && voices[v].lang.toLowerCase().indexOf(baseLang) === 0) {
+            preferred = voices[v];
+            break;
+        }
+    }
+    if (preferred) utterance.voice = preferred;
+    window.speechSynthesis.speak(utterance);
+    setAssistStatus("🔊 Playing: \"" + text + "\"");
+}
+
+function copyAssistPhrase(phrase, langCode) {
+    var langName = getAssistLangName(langCode);
+    var text = (phrase.translations[langCode] || phrase.en) + " [" + langName + "] — " + phrase.en;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(
+            function () { setAssistStatus("📋 Copied: " + phrase.en); },
+            function () { fallbackAssistCopy(text, phrase); }
+        );
+    } else {
+        fallbackAssistCopy(text, phrase);
+    }
+}
+
+function fallbackAssistCopy(text, phrase) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+        document.execCommand("copy");
+        setAssistStatus("📋 Copied: " + phrase.en);
+    } catch (e) {
+        setAssistStatus("Could not copy automatically — select the phrase text manually.");
+    }
+    document.body.removeChild(ta);
+}
+
+function useAssistPhraseInSOS(phrase, langCode) {
+    var langName = getAssistLangName(langCode);
+    var translated = phrase.translations[langCode] || phrase.en;
+
+    var desc = byId("sos-description");
+    if (desc) {
+        desc.value = translated + " [" + langName + "] — " + phrase.en + " (via Multilingual Assistant)";
+    }
+
+    if (phrase.suggestedType) {
+        var typeSel = byId("sos-type");
+        if (typeSel) {
+            for (var i = 0; i < typeSel.options.length; i++) {
+                if (typeSel.options[i].value === phrase.suggestedType) {
+                    typeSel.selectedIndex = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    var nav = document.querySelector('.nav-item[data-target="view-sos"]');
+    if (nav) nav.click();
+
+    setAssistStatus("🆘 Phrase added to the SOS form — complete the request and send it.");
+    var sosForm = byId("sos-form");
+    if (sosForm && sosForm.scrollIntoView) {
+        setTimeout(function () { sosForm.scrollIntoView({ behavior: "smooth", block: "start" }); }, 250);
+    }
+}
+
+function setAssistStatus(message) {
+    var statusEl = byId("assist-status");
+    if (statusEl) statusEl.textContent = message;
+}
+
+document.addEventListener("DOMContentLoaded", initAssist);

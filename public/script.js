@@ -180,6 +180,164 @@ async function safeSupabaseCall(fn, fallbackLabel) {
    4. MAP INITIALIZATION
    ========================================================================== */
 
+const PRIMARY_TILE_URL = "https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}{r}.png";
+const FALLBACK_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+// 1x1 transparent PNG shown in place of a tile that failed to download so the
+// grid never shows broken-image icons.
+const BLANK_TILE =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+let mapResizeHooksInstalled = false;
+let mapResizeTimer = null;
+let baseTileLayer = null;
+let tileFallbackApplied = false;
+
+/**
+ * Re-measure the map container. Leaflet caches the container size, so any
+ * time the container was hidden (display:none view), resized, or the layout
+ * shifted, the map must be told to re-measure or it renders only partially.
+ * Safe to call at any time; it is a no-op when the map is not visible.
+ */
+function refreshMapSize() {
+    if (!map || typeof map.invalidateSize !== "function") return;
+    const mapEl = byId("map");
+    if (!mapEl || mapEl.offsetParent === null) return; // hidden: nothing to measure yet
+    try {
+        map.invalidateSize({ animate: false, pan: false });
+    } catch (error) {
+        console.warn("Map resize failed:", error);
+    }
+}
+
+/** Schedule refreshMapSize() after the browser has finished layout. */
+function scheduleMapRefresh() {
+    if (!map) return;
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(function () {
+            refreshMapSize();
+            setTimeout(refreshMapSize, 120);
+        });
+    } else {
+        setTimeout(refreshMapSize, 50);
+    }
+}
+
+/**
+ * Show the view that hosts the #map element (the Dashboard) so that
+ * "View on Map" actions from other panels always land on a visible map.
+ * Returns true if a view switch happened.
+ */
+function ensureMapViewVisible() {
+    const mapEl = byId("map");
+    if (!mapEl) return false;
+    const host = mapEl.closest(".view-section");
+    if (!host || host.classList.contains("active")) return false;
+
+    const navItem = document.querySelector('.nav-item[data-target="' + host.id + '"]');
+    if (navItem) {
+        // Reuse the normal navigation path so title/subtitle/renders stay in sync.
+        navItem.click();
+    } else {
+        document.querySelectorAll(".view-section").forEach(function (section) {
+            section.classList.remove("active");
+        });
+        host.classList.add("active");
+    }
+    refreshMapSize();
+    return true;
+}
+
+/**
+ * Centre the map on a point, making sure the map is visible and correctly
+ * measured first. Used by every "focus on map" action.
+ */
+function focusMapOn(latlng, zoom, afterMove) {
+    if (!map) return;
+    ensureMapViewVisible();
+    refreshMapSize();
+    map.setView(latlng, zoom, { animate: false });
+    scheduleMapRefresh();
+    if (typeof afterMove === "function") {
+        setTimeout(afterMove, 60);
+    }
+}
+
+function installMapResizeHooks(mapEl) {
+    if (mapResizeHooksInstalled) return;
+    mapResizeHooksInstalled = true;
+
+    const debouncedRefresh = function () {
+        clearTimeout(mapResizeTimer);
+        mapResizeTimer = setTimeout(refreshMapSize, 100);
+    };
+
+    window.addEventListener("resize", debouncedRefresh);
+    window.addEventListener("orientationchange", function () {
+        setTimeout(refreshMapSize, 250);
+    });
+    window.addEventListener("load", scheduleMapRefresh);
+    document.addEventListener("visibilitychange", function () {
+        if (!document.hidden) scheduleMapRefresh();
+    });
+
+    // Observe the map container and its layout parents: sidebars, panels and
+    // stat cards changing size all alter the map's available width.
+    if (typeof ResizeObserver === "function") {
+        const observer = new ResizeObserver(debouncedRefresh);
+        observer.observe(mapEl);
+        if (mapEl.parentElement) observer.observe(mapEl.parentElement);
+        const main = document.querySelector("main");
+        if (main) observer.observe(main);
+    }
+}
+
+function createBaseTileLayer(url, attribution) {
+    return L.tileLayer(url, {
+        attribution: attribution,
+        maxZoom: 19,
+        minZoom: 3,
+        errorTileUrl: BLANK_TILE,
+        crossOrigin: true,
+        keepBuffer: 4,
+        updateWhenIdle: false,
+        updateWhenZooming: true
+    });
+}
+
+function attachBaseTiles(leafletMap) {
+    baseTileLayer = createBaseTileLayer(
+        PRIMARY_TILE_URL,
+        "&copy; OpenStreetMap contributors | Wikimedia Maps"
+    );
+
+    let loaded = 0;
+    let failed = 0;
+
+    baseTileLayer.on("tileload", function () { loaded++; });
+    baseTileLayer.on("tileerror", function () {
+        failed++;
+        // If the international-label server is unreachable entirely (no tile
+        // has ever loaded but many failed) fall back to the standard OSM
+        // server so the command map never stays grey. Labels may then use
+        // local scripts in some areas; this only happens on outage.
+        if (!tileFallbackApplied && loaded === 0 && failed >= 8) {
+            tileFallbackApplied = true;
+            console.warn("Primary map tiles unavailable — switching to fallback OpenStreetMap tiles.");
+            try {
+                leafletMap.removeLayer(baseTileLayer);
+                baseTileLayer = createBaseTileLayer(
+                    FALLBACK_TILE_URL,
+                    "&copy; OpenStreetMap contributors"
+                ).addTo(leafletMap);
+            } catch (error) {
+                console.warn("Tile fallback failed:", error);
+            }
+        }
+    });
+
+    baseTileLayer.addTo(leafletMap);
+}
+
 function initMap() {
     const mapEl = byId("map");
     if (!mapEl) {
@@ -187,25 +345,53 @@ function initMap() {
         return null;
     }
 
+    // Leaflet failed to load (offline / CDN blocked): keep the app usable and
+    // show a clear message inside the map area instead of throwing.
+    if (typeof L === "undefined" || !L || typeof L.map !== "function") {
+        console.error("Leaflet library not available — map cannot be rendered.");
+        mapEl.innerHTML =
+            '<div class="map-message"><h2>Map unavailable</h2>' +
+            "<p>The map library could not be loaded. Check the internet connection and refresh.</p></div>";
+        mapEl.classList.add("map");
+        return null;
+    }
+
     // Guard against Leaflet's "Map container is already initialized" error
     // if initApp() ever runs twice (e.g. hot reload, duplicate script include).
-    if (mapEl._leaflet_id) {
+    if (mapEl._leaflet_id || map) {
         console.warn("Map already initialized — reusing existing instance.");
+        scheduleMapRefresh();
         return map;
     }
 
-    const leafletMap = L.map("map").setView([27.5, 93.5], 6);
+    // Defensive sizing: if the stylesheet failed to apply, the container would
+    // collapse to 0px and Leaflet would render nothing.
+    if (!mapEl.style.minHeight) {
+        mapEl.style.minHeight = "320px";
+    }
+
+    const leafletMap = L.map(mapEl, {
+        center: [27.5, 93.5],
+        zoom: 6,
+        zoomControl: true,
+        scrollWheelZoom: true,
+        doubleClickZoom: true,
+        touchZoom: true,
+        dragging: true,
+        boxZoom: true,
+        keyboard: true,
+        tap: true,
+        zoomSnap: 0.5,
+        wheelPxPerZoomLevel: 80,
+        worldCopyJump: true,
+        preferCanvas: false
+    });
 
     // "osm-intl" = OpenStreetMap tiles with internationalised (Latin/English)
     // labels. The plain OSM tile server renders labels in each country's local
     // script (Chinese, Assamese, etc.), which is why labels looked Chinese when
     // zooming near the China border. No API key required.
-    L.tileLayer("https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OpenStreetMap contributors | Wikimedia Maps",
-        maxZoom: 19
-    }).addTo(leafletMap);
-
-
+    attachBaseTiles(leafletMap);
 
     leafletMap.on("click", function (event) {
         selectedStart = { lat: event.latlng.lat, lng: event.latlng.lng };
@@ -219,6 +405,15 @@ function initMap() {
             )
             .openOn(leafletMap);
     });
+
+    // Re-measure once Leaflet is ready and again after first paint, so the
+    // initial render is never a partial grid.
+    leafletMap.whenReady(function () {
+        map = leafletMap;
+        scheduleMapRefresh();
+    });
+
+    installMapResizeHooks(mapEl);
 
     return leafletMap;
 }
@@ -251,7 +446,7 @@ function getCurrentLocation() {
                 lng: position.coords.longitude
             };
             if (map) {
-                map.setView([selectedStart.lat, selectedStart.lng], 13);
+                focusMapOn([selectedStart.lat, selectedStart.lng], 13);
             }
             setText(
                 "location-display",
@@ -645,6 +840,7 @@ function drawRouteAnalysis(analysis, fitView) {
     ).addTo(map);
 
     if (fitView !== false) {
+        refreshMapSize();
         map.fitBounds(currentRouteLine.getBounds(), { padding: [30, 30] });
     }
 
@@ -883,7 +1079,7 @@ async function searchDestination() {
             .bindPopup("<b>Destination</b><br>" + escapeHTML(place.display_name))
             .openPopup();
 
-        map.setView([lat, lng], 13);
+        focusMapOn([lat, lng], 13);
     }
 
     setText("route-status", "Destination set: " + place.display_name);
@@ -1266,8 +1462,7 @@ async function updateIncidentStatus(id, newStatus) {
 function focusIncidentOnMap(id) {
     const marker = incidentMarkerById[id];
     if (!marker || !map) return;
-    map.setView(marker.getLatLng(), 14);
-    marker.openPopup();
+    focusMapOn(marker.getLatLng(), 14, function () { marker.openPopup(); });
 }
 
 async function syncIncidentToSupabase(incident) {
@@ -1726,8 +1921,7 @@ async function updateSOSStatus(id, newStatus) {
 function focusSOSOnMap(id) {
     const marker = sosMarkerById[id];
     if (!marker || !map) return;
-    map.setView(marker.getLatLng(), 14);
-    marker.openPopup();
+    focusMapOn(marker.getLatLng(), 14, function () { marker.openPopup(); });
 }
 
 async function syncSOSToSupabase(record) {
@@ -2925,9 +3119,10 @@ function initNavigation() {
             renderIncidentList();
             loadRescueDashboard();
 
-            if (map && typeof map.invalidateSize === "function") {
-                setTimeout(function () { map.invalidateSize(); }, 200);
-            }
+            // The map lives inside a view that was display:none a moment ago;
+            // re-measure it now and again after layout settles.
+            scheduleMapRefresh();
+            setTimeout(refreshMapSize, 300);
         });
     });
 }
@@ -3025,6 +3220,8 @@ window.updateIncidentStatus = updateIncidentStatus;
 window.clearIncidentForm = clearIncidentForm;
 window.viewIncidents = viewIncidents;
 window.focusIncidentOnMap = focusIncidentOnMap;
+window.refreshMapSize = refreshMapSize;
+window.focusMapOn = focusMapOn;
 
 window.useSelectedSOSLocation = useSelectedSOSLocation;
 window.getSOSLocation = getSOSLocation;

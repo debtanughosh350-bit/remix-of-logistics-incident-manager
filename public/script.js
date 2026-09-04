@@ -10,7 +10,8 @@
 const STORAGE_KEYS = {
     INCIDENTS: "nerSmartIncidents",
     SOS: "nerSmartSOS",
-    RESOURCES: "nerSmartResources"
+    RESOURCES: "nerSmartResources",
+    DISPATCH: "nerSmartDispatch"
 };
 
 const OSRM_BASE_URL = "https://router.project-osrm.org/route/v1/driving/";
@@ -1613,6 +1614,7 @@ function renderSOSList() {
             sosPriorityExplanationHTML(record) +
             "<p><b>People affected:</b> " + escapeHTML(record.peopleAffected) + "</p>" +
             "<p><b>Status:</b> " + escapeHTML(record.status) + "</p>" +
+            sosDispatchHTML(record, false) +
             "</div>"
         );
     }).join("");
@@ -1705,6 +1707,9 @@ async function updateSOSStatus(id, newStatus) {
 
     record.status = newStatus;
     saveToStorage(STORAGE_KEYS.SOS, records);
+
+    // A resolved SOS releases its vehicle back to the available pool.
+    if (newStatus === "RESOLVED") completeDispatchForSOS(id);
 
     loadSOS();
     loadRescueDashboard();
@@ -2147,7 +2152,7 @@ function renderSOSQueue() {
             '<div class="queue-actions">' +
             '<select onchange="updateSOSStatus(\'' + s.id + '\', this.value)">' + opt("OPEN") + opt("IN PROGRESS") + opt("RESOLVED") + "</select>" +
             '<button onclick="focusSOSOnMap(\'' + s.id + '\')">📍 View on Map</button>' +
-            "</div></div>"
+            "</div>" + sosDispatchHTML(s, true) + "</div>"
         );
     }).join("");
 }
@@ -2269,8 +2274,192 @@ function getDemoVehicles() {
     return [
         { id: "VEH-01", type: "Ambulance", location: "Guwahati", destination: "Relief Centre A", status: "AVAILABLE", routeStatus: "Clear", lastUpdated: nowISO() },
         { id: "VEH-02", type: "Relief Truck", location: "Dibrugarh", destination: "Relief Centre B", status: "IN TRANSIT", routeStatus: "Clear", lastUpdated: nowISO() },
-        { id: "VEH-03", type: "Boat", location: "Silchar", destination: "Flood Zone C", status: "DELAYED", routeStatus: "Road blocked", lastUpdated: nowISO() }
+        { id: "VEH-03", type: "Boat", location: "Silchar", destination: "Flood Zone C", status: "DELAYED", routeStatus: "Road blocked", lastUpdated: nowISO() },
+        { id: "VEH-04", type: "Rescue Vehicle", location: "Jorhat", destination: "Relief Centre C", status: "AVAILABLE", routeStatus: "Clear", lastUpdated: nowISO() },
+        { id: "VEH-05", type: "Ambulance", location: "Shillong", destination: "District Hospital", status: "MAINTENANCE", routeStatus: "Workshop", lastUpdated: nowISO() }
     ];
+}
+
+/* --------------------------------------------------------------------------
+   13b. RESCUE DISPATCH (SOS ↔ VEHICLE COORDINATION)
+   Prototype rule-based dispatch workflow — no real-time GPS fleet tracking.
+   -------------------------------------------------------------------------- */
+
+const DISPATCH_FLOW = ["DISPATCHED", "ON SCENE", "COMPLETED"];
+
+function getDispatches() {
+    return loadFromStorage(STORAGE_KEYS.DISPATCH);
+}
+
+function saveDispatches(records) {
+    saveToStorage(STORAGE_KEYS.DISPATCH, records);
+}
+
+function getActiveDispatches() {
+    return getDispatches().filter(function (d) { return d.dispatchStatus !== "COMPLETED"; });
+}
+
+function getDispatchForSOS(sosId) {
+    return getActiveDispatches().find(function (d) { return d.sosId === sosId; }) || null;
+}
+
+function getDispatchForVehicle(vehicleId) {
+    return getActiveDispatches().find(function (d) { return d.vehicleId === vehicleId; }) || null;
+}
+
+function isVehicleUnderMaintenance(vehicle) {
+    return String(vehicle.status || "").toUpperCase().indexOf("MAINTENANCE") !== -1;
+}
+
+// A vehicle is assignable when it is not under maintenance and is not already
+// committed to another active SOS case.
+function isVehicleAssignable(vehicle) {
+    if (isVehicleUnderMaintenance(vehicle)) return false;
+    return !getDispatchForVehicle(vehicle.id);
+}
+
+function getAssignableVehicles() {
+    return (demoVehicles || []).filter(isVehicleAssignable);
+}
+
+// Transparent rule-based recommendation (not an optimisation algorithm).
+function recommendVehicleForSOS(sos, vehicles) {
+    if (!vehicles.length) return null;
+    const type = (sos.emergencyType || "").toLowerCase();
+    const description = (sos.description || "").toLowerCase();
+    const medical = type.indexOf("medical") !== -1 || description.indexOf("injur") !== -1;
+    const water = type.indexOf("flood") !== -1 || description.indexOf("water") !== -1;
+
+    function firstOfType(keyword) {
+        return vehicles.find(function (v) {
+            return String(v.type || "").toLowerCase().indexOf(keyword) !== -1;
+        });
+    }
+
+    let preferred = null;
+    if (medical) preferred = firstOfType("ambulance");
+    if (!preferred && water) preferred = firstOfType("boat");
+    if (!preferred) preferred = firstOfType("rescue") || firstOfType("ambulance");
+    return preferred || vehicles[0];
+}
+
+function assignVehicleToSOS(sosId, vehicleId) {
+    if (!vehicleId) return;
+
+    const sos = getSavedSOS().find(function (s) { return s.id === sosId; });
+    const vehicle = (demoVehicles || []).find(function (v) { return v.id === vehicleId; });
+    if (!sos || !vehicle) return;
+
+    if (isVehicleUnderMaintenance(vehicle)) {
+        window.alert("Vehicle " + vehicle.id + " is under maintenance and cannot be dispatched.");
+        return;
+    }
+    if (getDispatchForVehicle(vehicleId)) {
+        window.alert("Vehicle " + vehicle.id + " is already dispatched to another active SOS.");
+        return;
+    }
+    if (getDispatchForSOS(sosId)) {
+        window.alert("SOS " + sosId + " already has an assigned vehicle.");
+        return;
+    }
+
+    const records = getDispatches();
+    records.push({
+        id: generateId("DSP"),
+        sosId: sosId,
+        vehicleId: vehicle.id,
+        vehicleType: vehicle.type,
+        dispatchStatus: "DISPATCHED",
+        assignedAt: nowISO(),
+        updatedAt: nowISO()
+    });
+    saveDispatches(records);
+    refreshDispatchViews();
+}
+
+function updateDispatchStatus(dispatchId, newStatus) {
+    if (DISPATCH_FLOW.indexOf(newStatus) === -1) return;
+    const records = getDispatches();
+    const dispatch = records.find(function (d) { return d.id === dispatchId; });
+    if (!dispatch) return;
+
+    dispatch.dispatchStatus = newStatus;
+    dispatch.updatedAt = nowISO();
+    saveDispatches(records);
+    refreshDispatchViews();
+}
+
+// Completing a dispatch releases the vehicle back to the available pool.
+function completeDispatch(dispatchId) {
+    updateDispatchStatus(dispatchId, "COMPLETED");
+}
+
+function completeDispatchForSOS(sosId) {
+    const dispatch = getDispatchForSOS(sosId);
+    if (dispatch) completeDispatch(dispatch.id);
+}
+
+function vehicleDispatchStatus(vehicle) {
+    const dispatch = getDispatchForVehicle(vehicle.id);
+    if (dispatch) return dispatch.dispatchStatus;
+    if (isVehicleUnderMaintenance(vehicle)) return "MAINTENANCE";
+    return vehicle.status || "AVAILABLE";
+}
+
+function refreshDispatchViews() {
+    if (demoVehicles && demoVehicles.length) {
+        renderVehiclesTable(demoVehicles);
+        renderVehicleMarkers(demoVehicles);
+    }
+    renderSOSList();
+    renderSOSQueue();
+}
+
+// Small assignment / dispatch control block reused by the SOS list and queue.
+function sosDispatchHTML(sos, withControls) {
+    const dispatch = getDispatchForSOS(sos.id);
+
+    if (dispatch) {
+        let html =
+            '<p class="sos-dispatch-line"><b>Vehicle:</b> ' + escapeHTML(dispatch.vehicleId) +
+            " | " + escapeHTML(dispatch.vehicleType) + " | " + escapeHTML(dispatch.dispatchStatus) + "</p>" +
+            "<p><b>Assigned:</b> " + escapeHTML(formatTime(dispatch.assignedAt)) + "</p>";
+
+        if (withControls) {
+            function opt(v) {
+                return '<option value="' + v + '"' + (dispatch.dispatchStatus === v ? " selected" : "") + ">" + v + "</option>";
+            }
+            html +=
+                '<div class="queue-actions">' +
+                '<select onchange="updateDispatchStatus(\'' + dispatch.id + '\', this.value)">' +
+                opt("DISPATCHED") + opt("ON SCENE") + opt("COMPLETED") + "</select>" +
+                '<button onclick="completeDispatch(\'' + dispatch.id + '\')">✅ Complete Dispatch</button>' +
+                "</div>";
+        }
+        return html;
+    }
+
+    if (!withControls) return "";
+    if (sos.priorityLevel !== "CRITICAL" && sos.priorityLevel !== "HIGH") return "";
+
+    const available = getAssignableVehicles();
+    if (!available.length) {
+        return '<p class="incident-empty">No available vehicle to assign right now.</p>';
+    }
+
+    const recommended = recommendVehicleForSOS(sos, available);
+    const options = available.map(function (v) {
+        const isRec = recommended && recommended.id === v.id;
+        return '<option value="' + v.id + '"' + (isRec ? " selected" : "") + ">" +
+            escapeHTML(v.id) + " — " + escapeHTML(v.type) + (isRec ? " (recommended)" : "") + "</option>";
+    }).join("");
+
+    return (
+        '<div class="queue-actions">' +
+        '<select id="assign-select-' + sos.id + '">' + options + "</select>" +
+        '<button onclick="assignVehicleToSOS(\'' + sos.id + '\', document.getElementById(\'assign-select-' + sos.id + '\').value)">🚑 Assign Vehicle</button>' +
+        "</div>"
+    );
 }
 
 function renderVehicleMarkers(vehicles) {
@@ -2283,9 +2472,13 @@ function renderVehicleMarkers(vehicles) {
 
     vehicles.forEach(function (vehicle) {
         if (vehicle.latitude == null || vehicle.longitude == null) return;
+        const dispatch = getDispatchForVehicle(vehicle.id);
+        const popup = "<b>🚑 " + escapeHTML(vehicle.type) + "</b><br>Status: " +
+            escapeHTML(vehicleDispatchStatus(vehicle)) +
+            (dispatch ? "<br>Assigned SOS: " + escapeHTML(dispatch.sosId) : "");
         const marker = L.marker([vehicle.latitude, vehicle.longitude])
             .addTo(map)
-            .bindPopup("<b>🚑 " + escapeHTML(vehicle.type) + "</b><br>Status: " + escapeHTML(vehicle.status));
+            .bindPopup(popup);
         vehicleMarkers.push(marker);
     });
 }
@@ -2295,11 +2488,13 @@ function renderVehiclesTable(vehicles) {
     if (!tbody) return;
 
     if (!vehicles.length) {
-        tbody.innerHTML = '<tr><td colspan="7">No vehicles available.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9">No vehicles available.</td></tr>';
         return;
     }
 
     tbody.innerHTML = vehicles.map(function (v) {
+        const dispatch = getDispatchForVehicle(v.id);
+        const assignment = dispatch ? dispatch.sosId : (isVehicleUnderMaintenance(v) ? "Maintenance" : "Unassigned");
         return (
             "<tr>" +
             "<td>" + escapeHTML(v.id) + "</td>" +
@@ -2307,6 +2502,8 @@ function renderVehiclesTable(vehicles) {
             "<td>" + escapeHTML(v.location) + "</td>" +
             "<td>" + escapeHTML(v.destination) + "</td>" +
             "<td>" + escapeHTML(v.status) + "</td>" +
+            "<td>" + escapeHTML(assignment) + "</td>" +
+            "<td>" + escapeHTML(vehicleDispatchStatus(v)) + "</td>" +
             "<td>" + escapeHTML(v.routeStatus) + "</td>" +
             "<td>" + escapeHTML(formatTime(v.lastUpdated)) + "</td>" +
             "</tr>"
@@ -2624,6 +2821,9 @@ async function initApp() {
 
     try {
         await loadVehicles();
+        // Vehicles load asynchronously, so re-render the SOS views once the
+        // fleet is known and assignment controls can be offered.
+        refreshDispatchViews();
     } catch (error) {
         console.error("Vehicle loading failed:", error);
     }
@@ -2664,6 +2864,10 @@ window.getSOSLocation = getSOSLocation;
 window.submitSOS = submitSOS;
 window.updateSOSStatus = updateSOSStatus;
 window.focusSOSOnMap = focusSOSOnMap;
+
+window.assignVehicleToSOS = assignVehicleToSOS;
+window.updateDispatchStatus = updateDispatchStatus;
+window.completeDispatch = completeDispatch;
 
 window.useSelectedResourceLocation = useSelectedResourceLocation;
 window.getResourceLocation = getResourceLocation;

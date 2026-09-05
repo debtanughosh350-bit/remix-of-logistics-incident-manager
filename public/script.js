@@ -11,7 +11,7 @@ const STORAGE_KEYS = {
     INCIDENTS: "nerSmartIncidents",
     SOS: "nerSmartSOS",
     RESOURCES: "nerSmartResources",
-    DISPATCH: "nerSmartDispatch"
+    DISPATCHES: "nerSmartDispatches"
 };
 
 const OSRM_BASE_URL = "https://router.project-osrm.org/route/v1/driving/";
@@ -180,164 +180,6 @@ async function safeSupabaseCall(fn, fallbackLabel) {
    4. MAP INITIALIZATION
    ========================================================================== */
 
-const PRIMARY_TILE_URL = "https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}{r}.png";
-const FALLBACK_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-// 1x1 transparent PNG shown in place of a tile that failed to download so the
-// grid never shows broken-image icons.
-const BLANK_TILE =
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
-
-let mapResizeHooksInstalled = false;
-let mapResizeTimer = null;
-let baseTileLayer = null;
-let tileFallbackApplied = false;
-
-/**
- * Re-measure the map container. Leaflet caches the container size, so any
- * time the container was hidden (display:none view), resized, or the layout
- * shifted, the map must be told to re-measure or it renders only partially.
- * Safe to call at any time; it is a no-op when the map is not visible.
- */
-function refreshMapSize() {
-    if (!map || typeof map.invalidateSize !== "function") return;
-    const mapEl = byId("map");
-    if (!mapEl || mapEl.offsetParent === null) return; // hidden: nothing to measure yet
-    try {
-        map.invalidateSize({ animate: false, pan: false });
-    } catch (error) {
-        console.warn("Map resize failed:", error);
-    }
-}
-
-/** Schedule refreshMapSize() after the browser has finished layout. */
-function scheduleMapRefresh() {
-    if (!map) return;
-    if (typeof requestAnimationFrame === "function") {
-        requestAnimationFrame(function () {
-            refreshMapSize();
-            setTimeout(refreshMapSize, 120);
-        });
-    } else {
-        setTimeout(refreshMapSize, 50);
-    }
-}
-
-/**
- * Show the view that hosts the #map element (the Dashboard) so that
- * "View on Map" actions from other panels always land on a visible map.
- * Returns true if a view switch happened.
- */
-function ensureMapViewVisible() {
-    const mapEl = byId("map");
-    if (!mapEl) return false;
-    const host = mapEl.closest(".view-section");
-    if (!host || host.classList.contains("active")) return false;
-
-    const navItem = document.querySelector('.nav-item[data-target="' + host.id + '"]');
-    if (navItem) {
-        // Reuse the normal navigation path so title/subtitle/renders stay in sync.
-        navItem.click();
-    } else {
-        document.querySelectorAll(".view-section").forEach(function (section) {
-            section.classList.remove("active");
-        });
-        host.classList.add("active");
-    }
-    refreshMapSize();
-    return true;
-}
-
-/**
- * Centre the map on a point, making sure the map is visible and correctly
- * measured first. Used by every "focus on map" action.
- */
-function focusMapOn(latlng, zoom, afterMove) {
-    if (!map) return;
-    ensureMapViewVisible();
-    refreshMapSize();
-    map.setView(latlng, zoom, { animate: false });
-    scheduleMapRefresh();
-    if (typeof afterMove === "function") {
-        setTimeout(afterMove, 60);
-    }
-}
-
-function installMapResizeHooks(mapEl) {
-    if (mapResizeHooksInstalled) return;
-    mapResizeHooksInstalled = true;
-
-    const debouncedRefresh = function () {
-        clearTimeout(mapResizeTimer);
-        mapResizeTimer = setTimeout(refreshMapSize, 100);
-    };
-
-    window.addEventListener("resize", debouncedRefresh);
-    window.addEventListener("orientationchange", function () {
-        setTimeout(refreshMapSize, 250);
-    });
-    window.addEventListener("load", scheduleMapRefresh);
-    document.addEventListener("visibilitychange", function () {
-        if (!document.hidden) scheduleMapRefresh();
-    });
-
-    // Observe the map container and its layout parents: sidebars, panels and
-    // stat cards changing size all alter the map's available width.
-    if (typeof ResizeObserver === "function") {
-        const observer = new ResizeObserver(debouncedRefresh);
-        observer.observe(mapEl);
-        if (mapEl.parentElement) observer.observe(mapEl.parentElement);
-        const main = document.querySelector("main");
-        if (main) observer.observe(main);
-    }
-}
-
-function createBaseTileLayer(url, attribution) {
-    return L.tileLayer(url, {
-        attribution: attribution,
-        maxZoom: 19,
-        minZoom: 3,
-        errorTileUrl: BLANK_TILE,
-        crossOrigin: true,
-        keepBuffer: 4,
-        updateWhenIdle: false,
-        updateWhenZooming: true
-    });
-}
-
-function attachBaseTiles(leafletMap) {
-    baseTileLayer = createBaseTileLayer(
-        PRIMARY_TILE_URL,
-        "&copy; OpenStreetMap contributors | Wikimedia Maps"
-    );
-
-    let loaded = 0;
-    let failed = 0;
-
-    baseTileLayer.on("tileload", function () { loaded++; });
-    baseTileLayer.on("tileerror", function () {
-        failed++;
-        // If the international-label server is unreachable entirely (no tile
-        // has ever loaded but many failed) fall back to the standard OSM
-        // server so the command map never stays grey. Labels may then use
-        // local scripts in some areas; this only happens on outage.
-        if (!tileFallbackApplied && loaded === 0 && failed >= 8) {
-            tileFallbackApplied = true;
-            console.warn("Primary map tiles unavailable — switching to fallback OpenStreetMap tiles.");
-            try {
-                leafletMap.removeLayer(baseTileLayer);
-                baseTileLayer = createBaseTileLayer(
-                    FALLBACK_TILE_URL,
-                    "&copy; OpenStreetMap contributors"
-                ).addTo(leafletMap);
-            } catch (error) {
-                console.warn("Tile fallback failed:", error);
-            }
-        }
-    });
-
-    baseTileLayer.addTo(leafletMap);
-}
-
 function initMap() {
     const mapEl = byId("map");
     if (!mapEl) {
@@ -345,53 +187,25 @@ function initMap() {
         return null;
     }
 
-    // Leaflet failed to load (offline / CDN blocked): keep the app usable and
-    // show a clear message inside the map area instead of throwing.
-    if (typeof L === "undefined" || !L || typeof L.map !== "function") {
-        console.error("Leaflet library not available — map cannot be rendered.");
-        mapEl.innerHTML =
-            '<div class="map-message"><h2>Map unavailable</h2>' +
-            "<p>The map library could not be loaded. Check the internet connection and refresh.</p></div>";
-        mapEl.classList.add("map");
-        return null;
-    }
-
     // Guard against Leaflet's "Map container is already initialized" error
     // if initApp() ever runs twice (e.g. hot reload, duplicate script include).
-    if (mapEl._leaflet_id || map) {
+    if (mapEl._leaflet_id) {
         console.warn("Map already initialized — reusing existing instance.");
-        scheduleMapRefresh();
         return map;
     }
 
-    // Defensive sizing: if the stylesheet failed to apply, the container would
-    // collapse to 0px and Leaflet would render nothing.
-    if (!mapEl.style.minHeight) {
-        mapEl.style.minHeight = "320px";
-    }
-
-    const leafletMap = L.map(mapEl, {
-        center: [27.5, 93.5],
-        zoom: 6,
-        zoomControl: true,
-        scrollWheelZoom: true,
-        doubleClickZoom: true,
-        touchZoom: true,
-        dragging: true,
-        boxZoom: true,
-        keyboard: true,
-        tap: true,
-        zoomSnap: 0.5,
-        wheelPxPerZoomLevel: 80,
-        worldCopyJump: true,
-        preferCanvas: false
-    });
+    const leafletMap = L.map("map").setView([27.5, 93.5], 6);
 
     // "osm-intl" = OpenStreetMap tiles with internationalised (Latin/English)
     // labels. The plain OSM tile server renders labels in each country's local
     // script (Chinese, Assamese, etc.), which is why labels looked Chinese when
     // zooming near the China border. No API key required.
-    attachBaseTiles(leafletMap);
+    L.tileLayer("https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}{r}.png", {
+        attribution: "&copy; OpenStreetMap contributors | Wikimedia Maps",
+        maxZoom: 19
+    }).addTo(leafletMap);
+
+
 
     leafletMap.on("click", function (event) {
         selectedStart = { lat: event.latlng.lat, lng: event.latlng.lng };
@@ -405,15 +219,6 @@ function initMap() {
             )
             .openOn(leafletMap);
     });
-
-    // Re-measure once Leaflet is ready and again after first paint, so the
-    // initial render is never a partial grid.
-    leafletMap.whenReady(function () {
-        map = leafletMap;
-        scheduleMapRefresh();
-    });
-
-    installMapResizeHooks(mapEl);
 
     return leafletMap;
 }
@@ -446,7 +251,7 @@ function getCurrentLocation() {
                 lng: position.coords.longitude
             };
             if (map) {
-                focusMapOn([selectedStart.lat, selectedStart.lng], 13);
+                map.setView([selectedStart.lat, selectedStart.lng], 13);
             }
             setText(
                 "location-display",
@@ -592,365 +397,6 @@ function getRouteStyleForScore(score) {
     return { color: "#dc2626", label: "High-risk route" };
 }
 
-/* --------------------------------------------------------------------------
-   6a. GEOMETRY HELPERS (Haversine + point-to-segment distance)
-   -------------------------------------------------------------------------- */
-
-function toRadians(deg) {
-    return (deg * Math.PI) / 180;
-}
-
-// Great-circle distance between two {lat,lng} points, in kilometres.
-function haversineKm(a, b) {
-    if (!a || !b) return Infinity;
-    const R = 6371;
-    const dLat = toRadians(b.lat - a.lat);
-    const dLng = toRadians(b.lng - a.lng);
-    const lat1 = toRadians(a.lat);
-    const lat2 = toRadians(b.lat);
-    const h =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
-    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
-}
-
-// Shortest distance (km) from a point to the segment A-B, using a local
-// equirectangular projection. Accurate enough at city / district scale.
-function pointToSegmentKm(point, a, b) {
-    const R = 6371;
-    const latRef = toRadians((a.lat + b.lat) / 2);
-
-    function project(p) {
-        return {
-            x: R * toRadians(p.lng) * Math.cos(latRef),
-            y: R * toRadians(p.lat)
-        };
-    }
-
-    const P = project(point);
-    const A = project(a);
-    const B = project(b);
-
-    const dx = B.x - A.x;
-    const dy = B.y - A.y;
-    const lenSq = dx * dx + dy * dy;
-
-    if (lenSq === 0) {
-        return haversineKm(point, a);
-    }
-
-    let t = ((P.x - A.x) * dx + (P.y - A.y) * dy) / lenSq;
-    t = clamp(t, 0, 1);
-
-    const cx = A.x + t * dx;
-    const cy = A.y + t * dy;
-
-    return Math.sqrt((P.x - cx) * (P.x - cx) + (P.y - cy) * (P.y - cy));
-}
-
-// Shortest distance (km) from a point to a polyline of {lat,lng} coordinates.
-function distanceToRouteKm(point, coords) {
-    if (!coords || coords.length === 0) return Infinity;
-    if (coords.length === 1) return haversineKm(point, coords[0]);
-
-    let best = Infinity;
-    for (let i = 0; i < coords.length - 1; i++) {
-        const d = pointToSegmentKm(point, coords[i], coords[i + 1]);
-        if (d < best) best = d;
-    }
-    return best;
-}
-
-/* --------------------------------------------------------------------------
-   6b. HAZARD COLLECTION AND ROUTE RISK SCORING
-   -------------------------------------------------------------------------- */
-
-// Distance from the route line within which a hazard is considered relevant.
-const HAZARD_CORRIDOR_KM = 1.5;
-
-const HAZARD_SEVERITY_WEIGHT = {
-    CRITICAL: 30,
-    HIGH: 20,
-    MEDIUM: 10,
-    LOW: 5
-};
-
-function normalizeSeverity(value) {
-    const text = String(value || "").toUpperCase();
-    if (text.indexOf("CRITICAL") !== -1) return "CRITICAL";
-    if (text.indexOf("HIGH") !== -1) return "HIGH";
-    if (text.indexOf("MEDIUM") !== -1 || text.indexOf("MODERATE") !== -1) return "MEDIUM";
-    return "LOW";
-}
-
-// Builds the live hazard list from data the app already stores:
-// reported incidents, HIGH/CRITICAL SOS requests and analysed risk points.
-function collectRouteHazards() {
-    const hazards = [];
-
-    getSavedIncidents().forEach(function (incident) {
-        if (incident.status === "RESOLVED") return;
-        const lat = parseFloat(incident.latitude);
-        const lng = parseFloat(incident.longitude);
-        if (isNaN(lat) || isNaN(lng)) return;
-
-        hazards.push({
-            source: "Incident",
-            type: incident.type || "Incident",
-            severity: normalizeSeverity(incident.severity),
-            lat: lat,
-            lng: lng,
-            label: (incident.type || "Incident") + " (" + (incident.id || "incident") + ")"
-        });
-    });
-
-    getSavedSOS().forEach(function (record) {
-        if (record.status === "RESOLVED") return;
-        const severity = normalizeSeverity(record.priorityLevel);
-        if (severity !== "HIGH" && severity !== "CRITICAL") return;
-
-        const lat = parseFloat(record.latitude);
-        const lng = parseFloat(record.longitude);
-        if (isNaN(lat) || isNaN(lng)) return;
-
-        hazards.push({
-            source: "SOS",
-            type: record.emergencyType || "SOS",
-            severity: severity,
-            lat: lat,
-            lng: lng,
-            label: "SOS: " + (record.emergencyType || "Emergency") + " (" + (record.id || "sos") + ")"
-        });
-    });
-
-    demoRiskPoints.forEach(function (risk) {
-        hazards.push({
-            source: "Risk point",
-            type: risk.label || "Risk point",
-            severity: normalizeSeverity(risk.level),
-            lat: risk.lat,
-            lng: risk.lng,
-            label: risk.label || "Risk point"
-        });
-    });
-
-    return hazards;
-}
-
-// Transparent scoring: every hazard near the route contributes its severity
-// weight, scaled down as it gets further from the route line.
-function scoreRouteHazards(hazards) {
-    let penalty = 0;
-
-    hazards.forEach(function (hazard) {
-        const weight = HAZARD_SEVERITY_WEIGHT[hazard.severity] || 5;
-        const proximityFactor = clamp(1 - (hazard.distanceKm / HAZARD_CORRIDOR_KM), 0.2, 1);
-        penalty += weight * proximityFactor;
-    });
-
-    const riskScore = clamp(Math.round(penalty), 0, 100);
-
-    let riskLevel = "LOW";
-    if (riskScore >= 70) riskLevel = "CRITICAL";
-    else if (riskScore >= 40) riskLevel = "HIGH";
-    else if (riskScore >= 15) riskLevel = "MEDIUM";
-
-    return { riskScore: riskScore, riskLevel: riskLevel };
-}
-
-// Analyses one genuine OSRM route object. No statistics are invented:
-// distance and duration come from OSRM, hazards from stored app data.
-function buildRouteAnalysis(route, index) {
-    const coords = (route.geometry && route.geometry.coordinates ? route.geometry.coordinates : [])
-        .map(function (pair) {
-            return { lat: pair[1], lng: pair[0] };
-        });
-
-    const analysis = {
-        index: index,
-        coords: coords,
-        distanceKm: (route.distance || 0) / 1000,
-        durationMin: (route.duration || 0) / 60
-    };
-
-    return analyseStoredRoute(analysis);
-}
-
-// Recomputes hazards / risk for an already-stored route geometry.
-function analyseStoredRoute(analysis) {
-    const nearby = [];
-
-    collectRouteHazards().forEach(function (hazard) {
-        const distanceKm = distanceToRouteKm({ lat: hazard.lat, lng: hazard.lng }, analysis.coords);
-        if (distanceKm <= HAZARD_CORRIDOR_KM) {
-            nearby.push(Object.assign({}, hazard, { distanceKm: distanceKm }));
-        }
-    });
-
-    nearby.sort(function (a, b) { return a.distanceKm - b.distanceKm; });
-
-    const scored = scoreRouteHazards(nearby);
-
-    const types = [];
-    nearby.forEach(function (hazard) {
-        if (types.indexOf(hazard.type) === -1) types.push(hazard.type);
-    });
-
-    analysis.hazards = nearby;
-    analysis.hazardTypes = types;
-    analysis.riskScore = scored.riskScore;
-    analysis.riskLevel = scored.riskLevel;
-    analysis.riskLabel = "Risk " + scored.riskLevel + " (" + scored.riskScore + "/100)";
-    analysis.hasSeriousHazard = nearby.some(function (hazard) {
-        return hazard.severity === "HIGH" || hazard.severity === "CRITICAL";
-    });
-    analysis.safetyScore = clamp(100 - scored.riskScore, 0, 100);
-
-    return analysis;
-}
-
-// Prefers the lowest-risk genuine alternative; ties break on travel time.
-function pickSaferRouteIndex(analyses) {
-    if (!analyses || !analyses.length) return 0;
-
-    let bestIndex = 0;
-    for (let i = 1; i < analyses.length; i++) {
-        const current = analyses[i];
-        const best = analyses[bestIndex];
-        if (
-            current.riskScore < best.riskScore ||
-            (current.riskScore === best.riskScore && current.durationMin < best.durationMin)
-        ) {
-            bestIndex = i;
-        }
-    }
-    return bestIndex;
-}
-
-function drawRouteAnalysis(analysis, fitView) {
-    if (!map || !analysis || !analysis.coords.length) return;
-
-    clearCurrentRoute();
-
-    const style = getRouteStyleForScore(analysis.safetyScore);
-
-    currentRouteLine = L.polyline(
-        analysis.coords.map(function (p) { return [p.lat, p.lng]; }),
-        { color: style.color, weight: 5, opacity: 0.85 }
-    ).addTo(map);
-
-    if (fitView !== false) {
-        refreshMapSize();
-        map.fitBounds(currentRouteLine.getBounds(), { padding: [30, 30] });
-    }
-
-    calculateAccessibilityScore(analysis.distanceKm, analysis.durationMin);
-    setText("dashboard-risk", analysis.riskLevel);
-    setText("risk", analysis.riskLevel + " (" + analysis.hazards.length + " hazard(s))");
-}
-
-/* --------------------------------------------------------------------------
-   6c. ROUTE INTELLIGENCE RENDERING + LIVE UPDATES
-   -------------------------------------------------------------------------- */
-
-function routeSummaryHTML(analysis, title) {
-    if (!analysis) return "";
-
-    const typesText = analysis.hazardTypes.length
-        ? analysis.hazardTypes.map(escapeHTML).join(", ")
-        : "None detected";
-
-    return (
-        '<div class="route-summary">' +
-        "<h4>" + escapeHTML(title) + "</h4>" +
-        "<p><b>Distance:</b> " + analysis.distanceKm.toFixed(1) + " km</p>" +
-        "<p><b>ETA:</b> " + Math.round(analysis.durationMin) + " min</p>" +
-        "<p><b>Risk score:</b> " + analysis.riskScore + "/100</p>" +
-        "<p><b>Risk level:</b> " + escapeHTML(analysis.riskLevel) + "</p>" +
-        "<p><b>Hazards near route:</b> " + analysis.hazards.length + "</p>" +
-        "<p><b>Hazard types:</b> " + typesText + "</p>" +
-        "</div>"
-    );
-}
-
-function renderRouteIntelligence() {
-    const resultEl = byId("routeResult");
-    const panelEl = byId("route-intel-panel");
-
-    if (!lastRouteAnalyses.length) {
-        const empty =
-            "No route has been calculated yet. Open the Dashboard map, select a start point, " +
-            "search a destination and click “Find Accessible Route”.";
-        if (resultEl) resultEl.textContent = empty;
-        if (panelEl) panelEl.innerHTML = "<p>" + empty + "</p>";
-        return;
-    }
-
-    const fastest = lastRouteAnalyses.reduce(function (best, item) {
-        return item.durationMin < best.durationMin ? item : best;
-    }, lastRouteAnalyses[0]);
-
-    const safest = lastRouteAnalyses[pickSaferRouteIndex(lastRouteAnalyses)];
-    const selected = lastRouteAnalyses[selectedRouteAnalysisIndex] || safest;
-
-    let html = "";
-
-    if (selected.hasSeriousHazard) {
-        html +=
-            '<p class="route-warning">⚠️ Serious hazard detected near this route — ' +
-            escapeHTML(selected.hazards[0].label) + " about " +
-            selected.hazards[0].distanceKm.toFixed(1) + " km from the road.</p>";
-    }
-
-    html += routeSummaryHTML(fastest, "⚡ Fastest Route (OSRM)");
-    html += routeSummaryHTML(selected, "🛡️ Safety Analysis (selected route)");
-    html += routeSummaryHTML(selected, "♿ Accessible Route (in use)");
-
-    if (lastRouteAnalyses.length > 1 && safest.index !== fastest.index) {
-        html +=
-            '<p class="route-note">A genuine OSRM alternative with a lower risk score is available ' +
-            "and has been selected (risk " + safest.riskScore + "/100 vs " + fastest.riskScore + "/100).</p>";
-    } else if (lastRouteAnalyses.length > 1) {
-        html +=
-            '<p class="route-note">OSRM returned ' + lastRouteAnalyses.length +
-            " alternatives; the current route already has the lowest risk score.</p>";
-    } else {
-        html +=
-            '<p class="route-note">OSRM returned only one route for this pair of points, so no ' +
-            "alternative exists. The safety analysis above applies to that single route.</p>";
-    }
-
-    if (resultEl) resultEl.innerHTML = html;
-    if (panelEl) panelEl.innerHTML = html;
-}
-
-// Re-runs hazard detection for already-calculated routes whenever incidents,
-// SOS records or risk points change. Never re-requests OSRM.
-function updateRouteRiskAnalysis() {
-    if (!lastRouteAnalyses.length) {
-        renderRouteIntelligence();
-        return;
-    }
-
-    lastRouteAnalyses = lastRouteAnalyses.map(function (analysis) {
-        return analyseStoredRoute(analysis);
-    });
-
-    selectedRouteAnalysisIndex = pickSaferRouteIndex(lastRouteAnalyses);
-
-    const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
-    if (chosen) {
-        setText("dashboard-risk", chosen.riskLevel);
-        drawRouteAnalysis(chosen, false);
-    }
-
-    renderRouteIntelligence();
-    renderRouteKPIs();
-    renderReports();
-}
-
-
-
 async function findAccessibleRoute() {
     if (!selectedStart) {
         setText("route-status", "Please select a starting location on the map first.");
@@ -1079,7 +525,7 @@ async function searchDestination() {
             .bindPopup("<b>Destination</b><br>" + escapeHTML(place.display_name))
             .openPopup();
 
-        focusMapOn([lat, lng], 13);
+        map.setView([lat, lng], 13);
     }
 
     setText("route-status", "Destination set: " + place.display_name);
@@ -1462,7 +908,8 @@ async function updateIncidentStatus(id, newStatus) {
 function focusIncidentOnMap(id) {
     const marker = incidentMarkerById[id];
     if (!marker || !map) return;
-    focusMapOn(marker.getLatLng(), 14, function () { marker.openPopup(); });
+    map.setView(marker.getLatLng(), 14);
+    marker.openPopup();
 }
 
 async function syncIncidentToSupabase(incident) {
@@ -1596,152 +1043,32 @@ function getSelectedSOSVulnerabilities() {
     return Array.prototype.slice.call(checkboxes).map(function (cb) { return cb.value; });
 }
 
-// --- Transparent, rule-based SOS priority scoring (0-100) --------------------
-// This is an explainable rule engine used for decision support in the
-// prototype. It is NOT a trained machine-learning model.
+function calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description) {
+    let score = SOS_EMERGENCY_BASE_SCORE[emergencyType] || 10;
 
-const SOS_VULNERABILITY_WEIGHT = {
-    "Children": 8,
-    "Elderly": 8,
-    "Pregnant": 9,
-    "Disabled": 9
-};
+    if (peopleAffected >= 20) score += 20;
+    else if (peopleAffected >= 10) score += 15;
+    else if (peopleAffected >= 5) score += 10;
+    else if (peopleAffected >= 2) score += 5;
 
-const SOS_VULNERABILITY_LABEL = {
-    "Children": "child present",
-    "Elderly": "elderly person",
-    "Pregnant": "pregnant person",
-    "Disabled": "person with disability"
-};
+    score += Math.min(vulnerabilities.length * 5, 20);
 
-// Nearby disaster risk taken from the existing risk system (risk points shown
-// on the map plus unresolved incidents), within this radius of the SOS.
-const SOS_RISK_RADIUS_KM = 3;
-
-function getNearbySOSRisk(lat, lng) {
-    if (lat == null || lng == null || typeof haversineKm !== "function") {
-        return { level: "NONE", points: 0, labels: [] };
-    }
-
-    let best = 0;
-    const labels = [];
-
-    function consider(pLat, pLng, level, label) {
-        if (pLat == null || pLng == null) return;
-        if (haversineKm({ lat: lat, lng: lng }, { lat: pLat, lng: pLng }) > SOS_RISK_RADIUS_KM) return;
-        const weight = level === "CRITICAL" ? 4 : level === "HIGH" ? 3 : level === "MEDIUM" ? 2 : 1;
-        if (weight > best) best = weight;
-        if (labels.indexOf(label) === -1) labels.push(label);
-    }
-
-    (demoRiskPoints || []).forEach(function (risk) {
-        consider(risk.lat, risk.lng, normalizeSeverity(risk.level), risk.label || "risk point");
-    });
-
-    getSavedIncidents().forEach(function (incident) {
-        if (incident.status === "RESOLVED") return;
-        consider(incident.latitude, incident.longitude,
-            normalizeSeverity(incident.severity), incident.type || "incident");
-    });
-
-    const levels = { 0: "NONE", 1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL" };
-    return { level: levels[best], points: best * 3, labels: labels.slice(0, 3) };
-}
-
-function calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description, location) {
-    const reasons = [];
-    const breakdown = [];
-    let score = 0;
-
-    // 1. Emergency / disaster type (severity of the request itself)
-    const typeScore = SOS_EMERGENCY_BASE_SCORE[emergencyType] || 10;
-    score += typeScore;
-    breakdown.push("Emergency type (" + (emergencyType || "Other") + "): +" + typeScore);
-    if (emergencyType === "Medical Emergency") reasons.push("medical emergency");
-    else if (typeScore >= 35) reasons.push("severe emergency type (" + emergencyType + ")");
-
-    // 2. Number of people affected
-    const people = parseInt(peopleAffected, 10) || 0;
-    let peopleScore = 0;
-    if (people >= 20) peopleScore = 20;
-    else if (people >= 10) peopleScore = 15;
-    else if (people >= 5) peopleScore = 10;
-    else if (people >= 2) peopleScore = 5;
-    score += peopleScore;
-    breakdown.push("People affected (" + people + "): +" + peopleScore);
-    if (people >= 10) reasons.push(people + " people affected");
-
-    // 3. Vulnerable people (elderly, disability, pregnant, child)
-    const vulns = vulnerabilities || [];
-    let vulnScore = 0;
-    vulns.forEach(function (v) { vulnScore += SOS_VULNERABILITY_WEIGHT[v] || 5; });
-    vulnScore = Math.min(vulnScore, 25);
-    score += vulnScore;
-    breakdown.push("Vulnerable people (" + (vulns.length || 0) + "): +" + vulnScore);
-    if (vulns.length) {
-        reasons.push(vulns.map(function (v) {
-            return SOS_VULNERABILITY_LABEL[v] || v.toLowerCase();
-        }).join(", "));
-    }
-
-    // 4. Urgency signals in the free-text description
     const lowerDescription = (description || "").toLowerCase();
-    const matchedKeywords = URGENT_KEYWORDS.filter(function (keyword) {
+    const hasUrgentKeyword = URGENT_KEYWORDS.some(function (keyword) {
         return lowerDescription.indexOf(keyword) !== -1;
     });
-    const keywordScore = Math.min(matchedKeywords.length * 6, 12);
-    score += keywordScore;
-    breakdown.push("Urgency keywords (" + matchedKeywords.length + "): +" + keywordScore);
-    if (matchedKeywords.length) reasons.push('report mentions "' + matchedKeywords[0] + '"');
-
-    // 5. Nearby disaster risk from the existing risk / incident data
-    const nearbyRisk = location ? getNearbySOSRisk(location.lat, location.lng)
-        : { level: "NONE", points: 0, labels: [] };
-    score += nearbyRisk.points;
-    breakdown.push("Nearby disaster risk (" + nearbyRisk.level + "): +" + nearbyRisk.points);
-    if (nearbyRisk.points > 0) {
-        reasons.push("nearby " + nearbyRisk.level.toLowerCase() + " risk area" +
-            (nearbyRisk.labels.length ? " (" + nearbyRisk.labels.join(", ") + ")" : ""));
-    }
+    if (hasUrgentKeyword) score += 10;
 
     score = clamp(Math.round(score), 0, 100);
 
     let priorityLevel;
-    if (score >= 75) priorityLevel = "CRITICAL";
-    else if (score >= 55) priorityLevel = "HIGH";
-    else if (score >= 35) priorityLevel = "MEDIUM";
+    if (score >= 80) priorityLevel = "CRITICAL";
+    else if (score >= 60) priorityLevel = "HIGH";
+    else if (score >= 40) priorityLevel = "MEDIUM";
     else priorityLevel = "LOW";
 
-    const priorityReason = reasons.length
-        ? priorityLevel + ": " + reasons.slice(0, 3).join(" + ") + "."
-        : priorityLevel + ": no escalating factors detected.";
-
-    return {
-        priorityScore: score,
-        priorityLevel: priorityLevel,
-        priorityReason: priorityReason,
-        priorityFactors: breakdown,
-        nearbyRiskLevel: nearbyRisk.level
-    };
+    return { priorityScore: score, priorityLevel: priorityLevel };
 }
-
-// Existing records saved before this upgrade have no stored explanation, so
-// recompute one from the data already on the record.
-function getSOSPriorityReason(record) {
-    if (record.priorityReason) return record.priorityReason;
-    const location = (record.latitude != null && record.longitude != null)
-        ? { lat: record.latitude, lng: record.longitude } : null;
-    return calculateSOSPriority(record.emergencyType, record.peopleAffected,
-        record.vulnerabilities, record.description, location).priorityReason;
-}
-
-// Small explanation block shown only for CRITICAL / HIGH requests.
-function sosPriorityExplanationHTML(record) {
-    const level = record.priorityLevel;
-    if (level !== "CRITICAL" && level !== "HIGH") return "";
-    return '<p class="sos-priority-why">🧠 ' + escapeHTML(getSOSPriorityReason(record)) + "</p>";
-}
-
 
 function getSOSPriorityRank(level) {
     const order = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
@@ -1807,11 +1134,9 @@ function renderSOSList() {
             '<div class="incident-card severity-' + record.priorityLevel.toLowerCase() + '">' +
             "<strong>" + escapeHTML(record.id) + "</strong>" +
             "<p><b>Type:</b> " + escapeHTML(record.emergencyType) + "</p>" +
-            "<p><b>Priority:</b> " + escapeHTML(record.priorityLevel) + " (score " + escapeHTML(record.priorityScore) + "/100)</p>" +
-            sosPriorityExplanationHTML(record) +
+            "<p><b>Priority:</b> " + escapeHTML(record.priorityLevel) + " (" + escapeHTML(record.priorityScore) + ")</p>" +
             "<p><b>People affected:</b> " + escapeHTML(record.peopleAffected) + "</p>" +
             "<p><b>Status:</b> " + escapeHTML(record.status) + "</p>" +
-            sosDispatchHTML(record, false) +
             "</div>"
         );
     }).join("");
@@ -1856,7 +1181,7 @@ async function submitSOS() {
         return;
     }
 
-    const priority = calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description, sosLocation);
+    const priority = calculateSOSPriority(emergencyType, peopleAffected, vulnerabilities, description);
 
     const record = {
         id: generateId("SOS"),
@@ -1868,9 +1193,6 @@ async function submitSOS() {
         longitude: sosLocation.lng,
         priorityScore: priority.priorityScore,
         priorityLevel: priority.priorityLevel,
-        priorityReason: priority.priorityReason,
-        priorityFactors: priority.priorityFactors,
-        nearbyRiskLevel: priority.nearbyRiskLevel,
         status: "OPEN",
         timestamp: nowISO(),
         supabaseId: null,
@@ -1884,8 +1206,8 @@ async function submitSOS() {
 
     if (statusEl) {
         statusEl.textContent =
-            "✅ SOS " + record.id + " sent. " + record.priorityReason +
-            " (rule-based score " + record.priorityScore + "/100). This is decision support only — " +
+            "✅ SOS " + record.id + " sent. Priority " + record.priorityLevel +
+            " (score " + record.priorityScore + "). This is decision support only — " +
             "also contact local emergency services if you can.";
     }
 
@@ -1905,9 +1227,6 @@ async function updateSOSStatus(id, newStatus) {
     record.status = newStatus;
     saveToStorage(STORAGE_KEYS.SOS, records);
 
-    // A resolved SOS releases its vehicle back to the available pool.
-    if (newStatus === "RESOLVED") completeDispatchForSOS(id);
-
     loadSOS();
     loadRescueDashboard();
 
@@ -1921,7 +1240,8 @@ async function updateSOSStatus(id, newStatus) {
 function focusSOSOnMap(id) {
     const marker = sosMarkerById[id];
     if (!marker || !map) return;
-    focusMapOn(marker.getLatLng(), 14, function () { marker.openPopup(); });
+    map.setView(marker.getLatLng(), 14);
+    marker.openPopup();
 }
 
 async function syncSOSToSupabase(record) {
@@ -2278,6 +1598,136 @@ function mergeResourcesFromSupabase(rows) {
 }
 
 /* ==========================================================================
+   11.5 VEHICLE DISPATCH & ASSIGNMENT
+   ========================================================================== */
+
+function getSavedDispatches() {
+    return loadFromStorage(STORAGE_KEYS.DISPATCHES);
+}
+
+function saveDispatches(records) {
+    saveToStorage(STORAGE_KEYS.DISPATCHES, records);
+}
+
+function getActiveDispatchForTarget(targetType, targetId) {
+    return getSavedDispatches().find(function (d) {
+        return d.status === "DISPATCHED" && d.targetType === targetType && d.targetId === targetId;
+    }) || null;
+}
+
+function getActiveDispatchForVehicle(vehicleId) {
+    return getSavedDispatches().find(function (d) {
+        return d.status === "DISPATCHED" && d.vehicleId === vehicleId;
+    }) || null;
+}
+
+function getVehicleDispatchState(vehicle) {
+    const dispatch = getActiveDispatchForVehicle(vehicle.id);
+    if (!dispatch) return vehicle;
+    return Object.assign({}, vehicle, {
+        status: "DISPATCHED",
+        dispatchId: dispatch.id,
+        dispatchTargetType: dispatch.targetType,
+        dispatchTargetId: dispatch.targetId,
+        lastUpdated: dispatch.dispatchedAt
+    });
+}
+
+function getCurrentVehicles() {
+    const source = demoVehicles && demoVehicles.length ? demoVehicles : getDemoVehicles();
+    return source.map(getVehicleDispatchState);
+}
+
+function renderDispatchActions(targetType, targetId) {
+    const current = getActiveDispatchForTarget(targetType, targetId);
+    if (current) {
+        return '<div class="dispatch-panel dispatch-active">' +
+            '<b>🚚 Assigned: ' + escapeHTML(current.vehicleId) + '</b> · DISPATCHED' +
+            '<button onclick="completeDispatch(\'' + escapeHTML(current.id) + '\')">Complete Dispatch</button>' +
+            '</div>';
+    }
+
+    const vehicles = getCurrentVehicles().filter(function (v) {
+        return v.status === "AVAILABLE";
+    });
+    if (!vehicles.length) {
+        return '<div class="dispatch-panel dispatch-empty">No available vehicle for dispatch.</div>';
+    }
+
+    const options = vehicles.map(function (v) {
+        return '<option value="' + escapeHTML(v.id) + '">' + escapeHTML(v.id + " — " + v.type + " — " + v.location) + '</option>';
+    }).join("");
+
+    return '<div class="dispatch-panel">' +
+        '<select id="dispatch-' + escapeHTML(targetType.toLowerCase()) + '-' + escapeHTML(targetId) + '">' +
+        '<option value="">Select available vehicle</option>' + options + '</select>' +
+        '<button onclick="dispatchVehicle(\'' + escapeHTML(targetType) + '\',\'' + escapeHTML(targetId) + '\')">🚚 Dispatch Vehicle</button>' +
+        '</div>';
+}
+
+function dispatchVehicle(targetType, targetId) {
+    const select = byId("dispatch-" + String(targetType).toLowerCase() + "-" + targetId);
+    const vehicleId = select ? select.value : "";
+    if (!vehicleId) {
+        alert("Please select an available vehicle first.");
+        return;
+    }
+    if (getActiveDispatchForTarget(targetType, targetId)) {
+        alert("This request already has an active vehicle assignment.");
+        return;
+    }
+    if (getActiveDispatchForVehicle(vehicleId)) {
+        alert("This vehicle is already dispatched.");
+        return;
+    }
+
+    const dispatch = {
+        id: generateId("DSP"),
+        vehicleId: vehicleId,
+        targetType: targetType,
+        targetId: targetId,
+        dispatchedAt: nowISO(),
+        status: "DISPATCHED",
+        completedAt: null
+    };
+    const records = getSavedDispatches();
+    records.push(dispatch);
+    saveDispatches(records);
+    refreshOperationalViews();
+}
+
+function completeDispatch(dispatchId) {
+    const records = getSavedDispatches();
+    const dispatch = records.find(function (d) { return d.id === dispatchId; });
+    if (!dispatch) return;
+    dispatch.status = "COMPLETED";
+    dispatch.completedAt = nowISO();
+    saveDispatches(records);
+    refreshOperationalViews();
+}
+
+function refreshOperationalViews() {
+    renderSOSQueue();
+    renderIncidentQueue();
+    calculateDashboardKPIs();
+    renderVehiclesTable(getCurrentVehicles());
+    renderVehicleMarkers(getCurrentVehicles());
+    rebuildAlertsFromData();
+    renderReports();
+}
+
+function renderReports() {
+    const incidents = getSavedIncidents();
+    const dispatches = getSavedDispatches();
+    const vehicles = getCurrentVehicles();
+    setText("report-active-routes", String(lastRouteAnalyses.length || 0));
+    setText("report-blocked-routes", String(incidents.filter(function (i) { return i.status !== "RESOLVED" && /block|flood|landslide/i.test(i.type || ""); }).length));
+    setText("report-high-risk-routes", String(demoRiskPoints.length || 0));
+    setText("report-active-vehicles", String(vehicles.filter(function (v) { return v.status === "IN TRANSIT" || v.status === "DISPATCHED"; }).length));
+    setText("report-dispatched-vehicles", String(dispatches.filter(function (d) { return d.status === "DISPATCHED"; }).length));
+}
+
+/* ==========================================================================
    12. RESCUE DASHBOARD
    ========================================================================== */
 
@@ -2285,6 +1735,7 @@ function calculateDashboardKPIs() {
     const sosRecords = getSavedSOS();
     const incidents = getSavedIncidents();
     const resources = getSavedResources();
+    const dispatches = getSavedDispatches();
 
     const criticalSOS = sosRecords.filter(function (s) { return s.priorityLevel === "CRITICAL" && s.status !== "RESOLVED"; }).length;
     const highSOS = sosRecords.filter(function (s) { return s.priorityLevel === "HIGH" && s.status !== "RESOLVED"; }).length;
@@ -2297,13 +1748,23 @@ function calculateDashboardKPIs() {
         }).length;
     }
 
+    const activeDispatches = dispatches.filter(function (d) { return d.status === "DISPATCHED"; });
+    const vehicles = getCurrentVehicles();
+    const activeVehicles = vehicles.filter(function (v) { return v.status === "IN TRANSIT" || v.status === "DISPATCHED"; }).length;
+    const availableVehicles = vehicles.filter(function (v) { return v.status === "AVAILABLE"; }).length;
+    const delayedVehicles = vehicles.filter(function (v) { return v.status === "DELAYED"; }).length;
+
     const kpis = {
         criticalSOS: criticalSOS,
         highSOS: highSOS,
         openIncidents: openIncidents,
         waterShortage: shortageCount("Water"),
         foodShortage: shortageCount("Food"),
-        medicineShortage: shortageCount("Medicine")
+        medicineShortage: shortageCount("Medicine"),
+        dispatchedVehicles: activeDispatches.length,
+        activeVehicles: activeVehicles,
+        availableVehicles: availableVehicles,
+        delayedVehicles: delayedVehicles
     };
 
     setText("kpi-critical-sos", kpis.criticalSOS);
@@ -2313,172 +1774,12 @@ function calculateDashboardKPIs() {
     setText("kpi-water-shortage", kpis.waterShortage);
     setText("kpi-food-shortage", kpis.foodShortage);
     setText("kpi-medicine-shortage", kpis.medicineShortage);
-
-    renderRouteKPIs();
-    renderVehicleKPIs();
-    renderReports();
+    setText("kpi-dispatched-vehicles", kpis.dispatchedVehicles);
+    setText("kpi-active-vehicles", kpis.activeVehicles);
+    setText("kpi-available-vehicles", kpis.availableVehicles);
+    setText("kpi-delayed-vehicles", kpis.delayedVehicles);
 
     return kpis;
-}
-
-/* --------------------------------------------------------------------------
-   12b. LIVE KPIs FOR DASHBOARD / VEHICLES / REPORTS
-   Every number below is derived from data already stored by this prototype
-   (incidents, SOS, dispatch records, resources, analysed routes).
-   -------------------------------------------------------------------------- */
-
-const BLOCKAGE_KEYWORDS = ["block", "landslide", "collapse", "closed"];
-
-function getRouteKPIs() {
-    const analyses = lastRouteAnalyses || [];
-
-    const blocked = analyses.filter(function (a) {
-        return (a.hazards || []).some(function (h) {
-            const text = ((h.type || "") + " " + (h.label || "")).toLowerCase();
-            return BLOCKAGE_KEYWORDS.some(function (k) { return text.indexOf(k) !== -1; });
-        });
-    }).length;
-
-    const highRisk = analyses.filter(function (a) {
-        return a.riskLevel === "HIGH" || a.riskLevel === "CRITICAL";
-    }).length;
-
-    return { analysed: analyses.length, blocked: blocked, highRisk: highRisk };
-}
-
-function getVehicleKPIs() {
-    const vehicles = demoVehicles || [];
-    const dispatched = vehicles.filter(function (v) { return !!getDispatchForVehicle(v.id); }).length;
-    const maintenance = vehicles.filter(isVehicleUnderMaintenance).length;
-    const available = vehicles.filter(isVehicleAssignable).length;
-    const utilization = vehicles.length ? Math.round((dispatched / vehicles.length) * 100) : 0;
-
-    return {
-        total: vehicles.length,
-        available: available,
-        dispatched: dispatched,
-        maintenance: maintenance,
-        utilization: utilization
-    };
-}
-
-function renderRouteKPIs() {
-    const route = getRouteKPIs();
-    setText("kpi-active-routes", route.analysed);
-    setText("kpi-blocked-routes", route.blocked);
-    setText("kpi-highrisk-routes", route.highRisk);
-    setText("kpi-active-routes-note", route.analysed
-        ? "Routes analysed in this session"
-        : "No route analysed yet");
-
-    const vehicles = getVehicleKPIs();
-    setText("kpi-dispatched-vehicles", vehicles.dispatched);
-    setText("kpi-dispatched-note", vehicles.dispatched
-        ? "Vehicles assigned to active SOS"
-        : "No active dispatches");
-}
-
-function renderVehicleKPIs() {
-    const v = getVehicleKPIs();
-    setText("kpi-veh-total", v.total);
-    setText("kpi-veh-available", v.available);
-    setText("kpi-veh-dispatched", v.dispatched);
-    setText("kpi-veh-maintenance", v.maintenance);
-}
-
-function renderReports() {
-    const route = getRouteKPIs();
-    const vehicles = getVehicleKPIs();
-    const incidents = getSavedIncidents();
-    const sosRecords = getSavedSOS();
-    const resources = getSavedResources();
-
-    setText("rep-active-routes", route.analysed);
-    setText("rep-blocked-routes", route.blocked);
-    setText("rep-highrisk-routes", route.highRisk);
-    setText("rep-dispatched-vehicles", vehicles.dispatched);
-
-    setText("rep-veh-total", vehicles.total);
-    setText("rep-veh-available", vehicles.available);
-    setText("rep-veh-dispatched", vehicles.dispatched);
-    setText("rep-veh-maintenance", vehicles.maintenance);
-    setText("rep-veh-utilization", vehicles.utilization + "%");
-
-    setText("rep-incidents-total", incidents.length);
-
-    const activeSOS = sosRecords.filter(function (s) { return s.status !== "RESOLVED"; });
-    setText("rep-sos-total", sosRecords.length);
-    setText("rep-sos-active", activeSOS.length);
-    setText("rep-sos-critical-high", activeSOS.filter(function (s) {
-        return s.priorityLevel === "CRITICAL" || s.priorityLevel === "HIGH";
-    }).length);
-
-    const shortages = resources.filter(function (r) {
-        return calculateResourceStatus(r.quantity, r.capacity).status !== "AVAILABLE";
-    }).length;
-    setText("rep-shortages", shortages);
-
-    renderIncidentBreakdown(incidents);
-    renderDispatchBreakdown();
-}
-
-function countBy(records, keyFn) {
-    const counts = {};
-    records.forEach(function (record) {
-        const key = keyFn(record) || "Unspecified";
-        counts[key] = (counts[key] || 0) + 1;
-    });
-    return counts;
-}
-
-function countsTableHTML(title, counts, columnLabel) {
-    const keys = Object.keys(counts);
-    if (!keys.length) return "";
-    return (
-        "<h3>" + escapeHTML(title) + "</h3>" +
-        '<div class="table-wrap"><table class="data-table"><thead><tr><th>' +
-        escapeHTML(columnLabel) + "</th><th>Count</th></tr></thead><tbody>" +
-        keys.map(function (key) {
-            return "<tr><td>" + escapeHTML(key) + "</td><td>" + counts[key] + "</td></tr>";
-        }).join("") +
-        "</tbody></table></div>"
-    );
-}
-
-function renderIncidentBreakdown(incidents) {
-    const el = byId("report-incident-breakdown");
-    if (!el) return;
-
-    if (!incidents.length) {
-        el.innerHTML = '<p class="incident-empty">No active incidents.</p>';
-        return;
-    }
-
-    el.innerHTML =
-        countsTableHTML("Incidents by type", countBy(incidents, function (i) { return i.type; }), "Type") +
-        countsTableHTML("Incidents by severity", countBy(incidents, function (i) { return i.severity; }), "Severity");
-}
-
-function renderDispatchBreakdown() {
-    const el = byId("report-dispatch-breakdown");
-    if (!el) return;
-
-    const active = getActiveDispatches();
-    if (!active.length) {
-        el.innerHTML = '<p class="incident-empty">No active dispatches.</p>';
-        return;
-    }
-
-    el.innerHTML =
-        "<h3>Active dispatches</h3>" +
-        '<div class="table-wrap"><table class="data-table"><thead><tr><th>Vehicle</th><th>Type</th>' +
-        "<th>SOS</th><th>Dispatch status</th><th>Assigned</th></tr></thead><tbody>" +
-        active.map(function (d) {
-            return "<tr><td>" + escapeHTML(d.vehicleId) + "</td><td>" + escapeHTML(d.vehicleType) +
-                "</td><td>" + escapeHTML(d.sosId) + "</td><td>" + escapeHTML(d.dispatchStatus) +
-                "</td><td>" + escapeHTML(formatTime(d.assignedAt)) + "</td></tr>";
-        }).join("") +
-        "</tbody></table></div>";
 }
 
 function renderSOSQueue() {
@@ -2504,15 +1805,14 @@ function renderSOSQueue() {
             '<div class="incident-card severity-' + s.priorityLevel.toLowerCase() + '">' +
             "<strong>" + escapeHTML(s.id) + "</strong>" +
             "<p><b>Type:</b> " + escapeHTML(s.emergencyType) + "</p>" +
-            "<p><b>Priority:</b> " + escapeHTML(s.priorityLevel) + " (score " + escapeHTML(s.priorityScore) + "/100)</p>" +
-            sosPriorityExplanationHTML(s) +
+            "<p><b>Priority:</b> " + escapeHTML(s.priorityLevel) + " (" + escapeHTML(s.priorityScore) + ")</p>" +
             "<p><b>People affected:</b> " + escapeHTML(s.peopleAffected) + "</p>" +
             "<p><b>Location:</b> " + escapeHTML(formatLatLng(s.latitude, s.longitude)) + "</p>" +
             "<p><b>Reported:</b> " + escapeHTML(formatTime(s.timestamp)) + "</p>" +
             '<div class="queue-actions">' +
             '<select onchange="updateSOSStatus(\'' + s.id + '\', this.value)">' + opt("OPEN") + opt("IN PROGRESS") + opt("RESOLVED") + "</select>" +
             '<button onclick="focusSOSOnMap(\'' + s.id + '\')">📍 View on Map</button>' +
-            "</div>" + sosDispatchHTML(s, true) + "</div>"
+            "</div>" + renderDispatchActions("SOS", s.id) + "</div>"
         );
     }).join("");
 }
@@ -2547,7 +1847,7 @@ function renderIncidentQueue() {
             '<div class="queue-actions">' +
             '<select onchange="updateIncidentStatus(\'' + i.id + '\', this.value)">' + opt("OPEN") + opt("IN PROGRESS") + opt("RESOLVED") + "</select>" +
             '<button onclick="focusIncidentOnMap(\'' + i.id + '\')">📍 View on Map</button>' +
-            "</div></div>"
+            "</div>" + renderDispatchActions("INCIDENT", i.id) + "</div>"
         );
     }).join("");
 }
@@ -2632,195 +1932,10 @@ function loadRescueDashboard() {
 
 function getDemoVehicles() {
     return [
-        { id: "VEH-01", type: "Ambulance", location: "Guwahati", destination: "Relief Centre A", status: "AVAILABLE", routeStatus: "Clear", lastUpdated: nowISO() },
-        { id: "VEH-02", type: "Relief Truck", location: "Dibrugarh", destination: "Relief Centre B", status: "IN TRANSIT", routeStatus: "Clear", lastUpdated: nowISO() },
-        { id: "VEH-03", type: "Boat", location: "Silchar", destination: "Flood Zone C", status: "DELAYED", routeStatus: "Road blocked", lastUpdated: nowISO() },
-        { id: "VEH-04", type: "Rescue Vehicle", location: "Jorhat", destination: "Relief Centre C", status: "AVAILABLE", routeStatus: "Clear", lastUpdated: nowISO() },
-        { id: "VEH-05", type: "Ambulance", location: "Shillong", destination: "District Hospital", status: "MAINTENANCE", routeStatus: "Workshop", lastUpdated: nowISO() }
+        { id: "VEH-01", type: "Ambulance (DEMO)", location: "Guwahati", destination: "Relief Centre A", status: "AVAILABLE", routeStatus: "Clear", latitude: 26.1445, longitude: 91.7362, lastUpdated: nowISO() },
+        { id: "VEH-02", type: "Relief Truck (DEMO)", location: "Dibrugarh", destination: "Relief Centre B", status: "IN TRANSIT", routeStatus: "Clear", latitude: 27.4728, longitude: 94.9120, lastUpdated: nowISO() },
+        { id: "VEH-03", type: "Boat (DEMO)", location: "Silchar", destination: "Flood Zone C", status: "DELAYED", routeStatus: "Road blocked", latitude: 24.8333, longitude: 92.7789, lastUpdated: nowISO() }
     ];
-}
-
-/* --------------------------------------------------------------------------
-   13b. RESCUE DISPATCH (SOS ↔ VEHICLE COORDINATION)
-   Prototype rule-based dispatch workflow — no real-time GPS fleet tracking.
-   -------------------------------------------------------------------------- */
-
-const DISPATCH_FLOW = ["DISPATCHED", "ON SCENE", "COMPLETED"];
-
-function getDispatches() {
-    return loadFromStorage(STORAGE_KEYS.DISPATCH);
-}
-
-function saveDispatches(records) {
-    saveToStorage(STORAGE_KEYS.DISPATCH, records);
-}
-
-function getActiveDispatches() {
-    return getDispatches().filter(function (d) { return d.dispatchStatus !== "COMPLETED"; });
-}
-
-function getDispatchForSOS(sosId) {
-    return getActiveDispatches().find(function (d) { return d.sosId === sosId; }) || null;
-}
-
-function getDispatchForVehicle(vehicleId) {
-    return getActiveDispatches().find(function (d) { return d.vehicleId === vehicleId; }) || null;
-}
-
-function isVehicleUnderMaintenance(vehicle) {
-    return String(vehicle.status || "").toUpperCase().indexOf("MAINTENANCE") !== -1;
-}
-
-// A vehicle is assignable when it is not under maintenance and is not already
-// committed to another active SOS case.
-function isVehicleAssignable(vehicle) {
-    if (isVehicleUnderMaintenance(vehicle)) return false;
-    return !getDispatchForVehicle(vehicle.id);
-}
-
-function getAssignableVehicles() {
-    return (demoVehicles || []).filter(isVehicleAssignable);
-}
-
-// Transparent rule-based recommendation (not an optimisation algorithm).
-function recommendVehicleForSOS(sos, vehicles) {
-    if (!vehicles.length) return null;
-    const type = (sos.emergencyType || "").toLowerCase();
-    const description = (sos.description || "").toLowerCase();
-    const medical = type.indexOf("medical") !== -1 || description.indexOf("injur") !== -1;
-    const water = type.indexOf("flood") !== -1 || description.indexOf("water") !== -1;
-
-    function firstOfType(keyword) {
-        return vehicles.find(function (v) {
-            return String(v.type || "").toLowerCase().indexOf(keyword) !== -1;
-        });
-    }
-
-    let preferred = null;
-    if (medical) preferred = firstOfType("ambulance");
-    if (!preferred && water) preferred = firstOfType("boat");
-    if (!preferred) preferred = firstOfType("rescue") || firstOfType("ambulance");
-    return preferred || vehicles[0];
-}
-
-function assignVehicleToSOS(sosId, vehicleId) {
-    if (!vehicleId) return;
-
-    const sos = getSavedSOS().find(function (s) { return s.id === sosId; });
-    const vehicle = (demoVehicles || []).find(function (v) { return v.id === vehicleId; });
-    if (!sos || !vehicle) return;
-
-    if (isVehicleUnderMaintenance(vehicle)) {
-        window.alert("Vehicle " + vehicle.id + " is under maintenance and cannot be dispatched.");
-        return;
-    }
-    if (getDispatchForVehicle(vehicleId)) {
-        window.alert("Vehicle " + vehicle.id + " is already dispatched to another active SOS.");
-        return;
-    }
-    if (getDispatchForSOS(sosId)) {
-        window.alert("SOS " + sosId + " already has an assigned vehicle.");
-        return;
-    }
-
-    const records = getDispatches();
-    records.push({
-        id: generateId("DSP"),
-        sosId: sosId,
-        vehicleId: vehicle.id,
-        vehicleType: vehicle.type,
-        dispatchStatus: "DISPATCHED",
-        assignedAt: nowISO(),
-        updatedAt: nowISO()
-    });
-    saveDispatches(records);
-    refreshDispatchViews();
-}
-
-function updateDispatchStatus(dispatchId, newStatus) {
-    if (DISPATCH_FLOW.indexOf(newStatus) === -1) return;
-    const records = getDispatches();
-    const dispatch = records.find(function (d) { return d.id === dispatchId; });
-    if (!dispatch) return;
-
-    dispatch.dispatchStatus = newStatus;
-    dispatch.updatedAt = nowISO();
-    saveDispatches(records);
-    refreshDispatchViews();
-}
-
-// Completing a dispatch releases the vehicle back to the available pool.
-function completeDispatch(dispatchId) {
-    updateDispatchStatus(dispatchId, "COMPLETED");
-}
-
-function completeDispatchForSOS(sosId) {
-    const dispatch = getDispatchForSOS(sosId);
-    if (dispatch) completeDispatch(dispatch.id);
-}
-
-function vehicleDispatchStatus(vehicle) {
-    const dispatch = getDispatchForVehicle(vehicle.id);
-    if (dispatch) return dispatch.dispatchStatus;
-    if (isVehicleUnderMaintenance(vehicle)) return "MAINTENANCE";
-    return vehicle.status || "AVAILABLE";
-}
-
-function refreshDispatchViews() {
-    if (demoVehicles && demoVehicles.length) {
-        renderVehiclesTable(demoVehicles);
-        renderVehicleMarkers(demoVehicles);
-    }
-    renderSOSList();
-    renderSOSQueue();
-    calculateDashboardKPIs();
-}
-
-// Small assignment / dispatch control block reused by the SOS list and queue.
-function sosDispatchHTML(sos, withControls) {
-    const dispatch = getDispatchForSOS(sos.id);
-
-    if (dispatch) {
-        let html =
-            '<p class="sos-dispatch-line"><b>Vehicle:</b> ' + escapeHTML(dispatch.vehicleId) +
-            " | " + escapeHTML(dispatch.vehicleType) + " | " + escapeHTML(dispatch.dispatchStatus) + "</p>" +
-            "<p><b>Assigned:</b> " + escapeHTML(formatTime(dispatch.assignedAt)) + "</p>";
-
-        if (withControls) {
-            function opt(v) {
-                return '<option value="' + v + '"' + (dispatch.dispatchStatus === v ? " selected" : "") + ">" + v + "</option>";
-            }
-            html +=
-                '<div class="queue-actions">' +
-                '<select onchange="updateDispatchStatus(\'' + dispatch.id + '\', this.value)">' +
-                opt("DISPATCHED") + opt("ON SCENE") + opt("COMPLETED") + "</select>" +
-                '<button onclick="completeDispatch(\'' + dispatch.id + '\')">✅ Complete Dispatch</button>' +
-                "</div>";
-        }
-        return html;
-    }
-
-    if (!withControls) return "";
-    if (sos.priorityLevel !== "CRITICAL" && sos.priorityLevel !== "HIGH") return "";
-
-    const available = getAssignableVehicles();
-    if (!available.length) {
-        return '<p class="incident-empty">No available vehicle to assign right now.</p>';
-    }
-
-    const recommended = recommendVehicleForSOS(sos, available);
-    const options = available.map(function (v) {
-        const isRec = recommended && recommended.id === v.id;
-        return '<option value="' + v.id + '"' + (isRec ? " selected" : "") + ">" +
-            escapeHTML(v.id) + " — " + escapeHTML(v.type) + (isRec ? " (recommended)" : "") + "</option>";
-    }).join("");
-
-    return (
-        '<div class="queue-actions">' +
-        '<select id="assign-select-' + sos.id + '">' + options + "</select>" +
-        '<button onclick="assignVehicleToSOS(\'' + sos.id + '\', document.getElementById(\'assign-select-' + sos.id + '\').value)">🚑 Assign Vehicle</button>' +
-        "</div>"
-    );
 }
 
 function renderVehicleMarkers(vehicles) {
@@ -2833,13 +1948,9 @@ function renderVehicleMarkers(vehicles) {
 
     vehicles.forEach(function (vehicle) {
         if (vehicle.latitude == null || vehicle.longitude == null) return;
-        const dispatch = getDispatchForVehicle(vehicle.id);
-        const popup = "<b>🚑 " + escapeHTML(vehicle.type) + "</b><br>Status: " +
-            escapeHTML(vehicleDispatchStatus(vehicle)) +
-            (dispatch ? "<br>Assigned SOS: " + escapeHTML(dispatch.sosId) : "");
         const marker = L.marker([vehicle.latitude, vehicle.longitude])
             .addTo(map)
-            .bindPopup(popup);
+            .bindPopup("<b>🚑 " + escapeHTML(vehicle.type) + "</b><br>Status: " + escapeHTML(vehicle.status));
         vehicleMarkers.push(marker);
     });
 }
@@ -2849,13 +1960,13 @@ function renderVehiclesTable(vehicles) {
     if (!tbody) return;
 
     if (!vehicles.length) {
-        tbody.innerHTML = '<tr><td colspan="9">No vehicles available.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7">No vehicles available.</td></tr>';
         return;
     }
 
-    tbody.innerHTML = vehicles.map(function (v) {
-        const dispatch = getDispatchForVehicle(v.id);
-        const assignment = dispatch ? dispatch.sosId : (isVehicleUnderMaintenance(v) ? "Maintenance" : "Unassigned");
+    tbody.innerHTML = vehicles.map(function (rawVehicle) {
+        const v = getVehicleDispatchState(rawVehicle);
+        const dispatch = getActiveDispatchForVehicle(v.id);
         return (
             "<tr>" +
             "<td>" + escapeHTML(v.id) + "</td>" +
@@ -2863,10 +1974,9 @@ function renderVehiclesTable(vehicles) {
             "<td>" + escapeHTML(v.location) + "</td>" +
             "<td>" + escapeHTML(v.destination) + "</td>" +
             "<td>" + escapeHTML(v.status) + "</td>" +
-            "<td>" + escapeHTML(assignment) + "</td>" +
-            "<td>" + escapeHTML(vehicleDispatchStatus(v)) + "</td>" +
             "<td>" + escapeHTML(v.routeStatus) + "</td>" +
             "<td>" + escapeHTML(formatTime(v.lastUpdated)) + "</td>" +
+            "<td>" + (dispatch ? '<button onclick="completeDispatch(\'' + escapeHTML(dispatch.id) + '\')">Complete</button>' : '—') + "</td>" +
             "</tr>"
         );
     }).join("");
@@ -2902,9 +2012,10 @@ async function loadVehicles() {
     }
 
     demoVehicles = vehicles;
-    renderVehiclesTable(vehicles);
-    renderVehicleMarkers(vehicles);
-    return vehicles;
+    const operationalVehicles = getCurrentVehicles();
+    renderVehiclesTable(operationalVehicles);
+    renderVehicleMarkers(operationalVehicles);
+    return operationalVehicles;
 }
 
 /* ==========================================================================
@@ -3119,10 +2230,9 @@ function initNavigation() {
             renderIncidentList();
             loadRescueDashboard();
 
-            // The map lives inside a view that was display:none a moment ago;
-            // re-measure it now and again after layout settles.
-            scheduleMapRefresh();
-            setTimeout(refreshMapSize, 300);
+            if (map && typeof map.invalidateSize === "function") {
+                setTimeout(function () { map.invalidateSize(); }, 200);
+            }
         });
     });
 }
@@ -3183,9 +2293,8 @@ async function initApp() {
 
     try {
         await loadVehicles();
-        // Vehicles load asynchronously, so re-render the SOS views once the
-        // fleet is known and assignment controls can be offered.
-        refreshDispatchViews();
+        loadRescueDashboard();
+        renderReports();
     } catch (error) {
         console.error("Vehicle loading failed:", error);
     }
@@ -3220,8 +2329,6 @@ window.updateIncidentStatus = updateIncidentStatus;
 window.clearIncidentForm = clearIncidentForm;
 window.viewIncidents = viewIncidents;
 window.focusIncidentOnMap = focusIncidentOnMap;
-window.refreshMapSize = refreshMapSize;
-window.focusMapOn = focusMapOn;
 
 window.useSelectedSOSLocation = useSelectedSOSLocation;
 window.getSOSLocation = getSOSLocation;
@@ -3229,360 +2336,26 @@ window.submitSOS = submitSOS;
 window.updateSOSStatus = updateSOSStatus;
 window.focusSOSOnMap = focusSOSOnMap;
 
-window.assignVehicleToSOS = assignVehicleToSOS;
-window.updateDispatchStatus = updateDispatchStatus;
-window.completeDispatch = completeDispatch;
-
 window.useSelectedResourceLocation = useSelectedResourceLocation;
 window.getResourceLocation = getResourceLocation;
 window.saveResource = saveResource;
 window.deleteResource = deleteResource;
 
 window.loadRescueDashboard = loadRescueDashboard;
+window.dispatchVehicle = dispatchVehicle;
+window.completeDispatch = completeDispatch;
 /* ==========================================================================
    20. ROUTE INTELLIGENCE DEMO ANALYSIS
    ========================================================================== */
 
-// Re-analyses the routes that OSRM actually returned. No demo statistics.
 window.analyzeRoute = function () {
-    updateRouteRiskAnalysis();
+    const result = byId("routeResult");
+    if (!result) return;
+    const incidents = getSavedIncidents().filter(function (i) { return i.status !== "RESOLVED"; });
+    const blocked = incidents.filter(function (i) { return /block|flood|landslide|bridge/i.test(i.type || ""); }).length;
+    result.innerHTML =
+        '🟢 <b>Route Decision Support</b><br><br>' +
+        'Current route engine uses live routing when a map start and destination are selected.<br><br>' +
+        'Active hazard reports considered: <b>' + blocked + '</b><br>' +
+        '<small>Rule-based operational support; not a guaranteed road-closure feed.</small>';
 };
-
-window.updateRouteRiskAnalysis = updateRouteRiskAnalysis;
-window.renderRouteIntelligence = renderRouteIntelligence;
-
-/* ==========================================================================
-   21. MULTILINGUAL EMERGENCY ASSISTANT (prototype phrasebook)
-   ========================================================================== */
-
-var ASSIST_LANGUAGES = [
-    { code: "en", native: "English", bcp47: "en-IN" },
-    { code: "hi", native: "हिन्दी (Hindi)", bcp47: "hi-IN" },
-    { code: "bn", native: "বাংলা (Bengali)", bcp47: "bn-IN" },
-    { code: "as", native: "অসমীয়া (Assamese)", bcp47: "as-IN" },
-    { code: "ne", native: "नेपाली (Nepali)", bcp47: "ne-IN" },
-    { code: "mz", native: "Mizo", bcp47: "lus-IN" }
-];
-
-var ASSIST_PHRASEBOOK = [
-    {
-        en: "Help!",
-        translations: {
-            en: "Help!",
-            hi: "मदद!",
-            bn: "বাঁচান!",
-            as: "বচাও!",
-            ne: "बचाउनुहोस्!",
-            mz: "Tanpui!"
-        }
-    },
-    {
-        en: "I need help",
-        translations: {
-            en: "I need help",
-            hi: "मुझे मदद चाहिए",
-            bn: "আমার সাহায্য দরকার",
-            as: "মোক সহায় লাগে",
-            ne: "मलाई मद्दत चाहियो",
-            mz: "Tanpuina ka mamawh"
-        }
-    },
-    {
-        en: "Medical emergency",
-        suggestedType: "Medical Emergency",
-        translations: {
-            en: "Medical emergency",
-            hi: "मेडिकल इमरजेंसी",
-            bn: "মেডিকেল জরুরি অবস্থা",
-            as: "চিকিৎসা জৰুৰী অৱস্থা",
-            ne: "मेडिकल आपतकालीन",
-            mz: "Damdawi hmanhmawh"
-        }
-    },
-    {
-        en: "There is a flood",
-        suggestedType: "Flood",
-        translations: {
-            en: "There is a flood",
-            hi: "बाढ़ आ गई है",
-            bn: "বন্যা হয়েছে",
-            as: "বানপানী হৈছে",
-            ne: "बाढी आयो",
-            mz: "Tui lian a lo thleng e"
-        }
-    },
-    {
-        en: "There is a fire",
-        translations: {
-            en: "There is a fire",
-            hi: "आग लग गई है",
-            bn: "আগুন লেগেছে",
-            as: "জুই লাগিছে",
-            ne: "आगो लाग्यो",
-            mz: "Mei a lo sen e"
-        }
-    },
-    {
-        en: "Landslide on the road",
-        translations: {
-            en: "Landslide on the road",
-            hi: "सड़क पर भूस्खलन हुआ है",
-            bn: "রাস্তায় ভূমিধস হয়েছে",
-            as: "বাটত ভূমিস্খলন হৈছে",
-            ne: "सडकमा पहिरो गयो",
-            mz: "Kawngah leilak a lo thleng e"
-        }
-    },
-    {
-        en: "The road is blocked",
-        translations: {
-            en: "The road is blocked",
-            hi: "सड़क बंद है",
-            bn: "রাস্তা বন্ধ",
-            as: "বাট বন্ধ হৈ আছে",
-            ne: "सडक बन्द छ",
-            mz: "Kawng a khar a"
-        }
-    },
-    {
-        en: "I need shelter",
-        translations: {
-            en: "I need shelter",
-            hi: "मुझे आश्रय चाहिए",
-            bn: "আমার আশ্রয় দরকার",
-            as: "মোক আশ্ৰয় দৰকাৰ",
-            ne: "मलाई आश्रय चाहियो",
-            mz: "Inhnuar ka mamawh"
-        }
-    },
-    {
-        en: "I need food and water",
-        suggestedType: "Food Required",
-        translations: {
-            en: "I need food and water",
-            hi: "मुझे खाना और पानी चाहिए",
-            bn: "আমার খাবার ও জল দরকার",
-            as: "মোক খোৱা বস্তু আৰু পানী দৰকাৰ",
-            ne: "मलाई खाना र पानी चाहियो",
-            mz: "Chaw leh tui ka mamawh"
-        }
-    },
-    {
-        en: "Please evacuate now",
-        translations: {
-            en: "Please evacuate now",
-            hi: "कृपया अभी खाली करें",
-            bn: "অনুগ্রহ করে এখনই সরে যান",
-            as: "অনুগ্ৰহ কৰি এতিয়াই স্থানান্তৰ হওক",
-            ne: "कृपया अहिले नै सुरक्षित स्थानमा जानुहोस्",
-            mz: "Tûnah hian chhuak rawh u"
-        }
-    },
-    {
-        en: "Stay safe",
-        translations: {
-            en: "Stay safe",
-            hi: "सुरक्षित रहें",
-            bn: "নিরাপদে থাকুন",
-            as: "সুৰক্ষিত থাকক",
-            ne: "सुरक्षित रहनुहोस्",
-            mz: "Him takin awm rawh"
-        }
-    },
-    {
-        en: "Help is on the way",
-        translations: {
-            en: "Help is on the way",
-            hi: "मदद रास्ते में है",
-            bn: "সাহায্য আসছে",
-            as: "সহায় আহি আছে",
-            ne: "मद्दत आउँदै छ",
-            mz: "Tanpuina a lo thleng mek e"
-        }
-    }
-];
-
-var assistLang = "en";
-
-function initAssist() {
-    renderAssistLanguages();
-    renderAssistPhrases();
-}
-
-function getAssistLangName(code) {
-    for (var i = 0; i < ASSIST_LANGUAGES.length; i++) {
-        if (ASSIST_LANGUAGES[i].code === code) return ASSIST_LANGUAGES[i].native;
-    }
-    return "English";
-}
-
-function renderAssistLanguages() {
-    var wrap = byId("assist-langs");
-    if (!wrap) return;
-    wrap.innerHTML = "";
-    ASSIST_LANGUAGES.forEach(function (lang) {
-        var chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "lang-chip" + (lang.code === assistLang ? " active" : "");
-        chip.textContent = lang.native;
-        chip.setAttribute("data-lang", lang.code);
-        chip.addEventListener("click", function () {
-            assistLang = lang.code;
-            renderAssistLanguages();
-            renderAssistPhrases();
-        });
-        wrap.appendChild(chip);
-    });
-}
-
-function renderAssistPhrases() {
-    var wrap = byId("assist-phrases");
-    if (!wrap) return;
-    wrap.innerHTML = "";
-    ASSIST_PHRASEBOOK.forEach(function (phrase) {
-        var card = document.createElement("div");
-        card.className = "phrase-card";
-
-        var main = document.createElement("div");
-        main.className = "phrase-main";
-
-        var text = document.createElement("p");
-        text.className = "phrase-text";
-        text.textContent = phrase.translations[assistLang] || phrase.en;
-
-        var gloss = document.createElement("p");
-        gloss.className = "phrase-en";
-        gloss.textContent = phrase.en;
-
-        main.appendChild(text);
-        main.appendChild(gloss);
-
-        var actions = document.createElement("div");
-        actions.className = "phrase-actions";
-
-        var speak = document.createElement("button");
-        speak.type = "button";
-        speak.className = "phrase-btn";
-        speak.textContent = "🔊 Speak";
-        speak.addEventListener("click", function () {
-            speakPhrase(assistLang, phrase.translations[assistLang] || phrase.en);
-        });
-
-        var copy = document.createElement("button");
-        copy.type = "button";
-        copy.className = "phrase-btn";
-        copy.textContent = "📋 Copy";
-        copy.addEventListener("click", function () {
-            copyAssistPhrase(phrase, assistLang);
-        });
-
-        var use = document.createElement("button");
-        use.type = "button";
-        use.className = "phrase-btn phrase-btn-primary";
-        use.textContent = "🆘 Use in SOS";
-        use.addEventListener("click", function () {
-            useAssistPhraseInSOS(phrase, assistLang);
-        });
-
-        actions.appendChild(speak);
-        actions.appendChild(copy);
-        actions.appendChild(use);
-        card.appendChild(main);
-        card.appendChild(actions);
-        wrap.appendChild(card);
-    });
-}
-
-function speakPhrase(langCode, text) {
-    if (!("speechSynthesis" in window)) {
-        setAssistStatus("Speech is not supported on this device/browser.");
-        return;
-    }
-    var bcp47 = "en-IN";
-    for (var i = 0; i < ASSIST_LANGUAGES.length; i++) {
-        if (ASSIST_LANGUAGES[i].code === langCode) bcp47 = ASSIST_LANGUAGES[i].bcp47;
-    }
-    window.speechSynthesis.cancel();
-    var utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = bcp47;
-    utterance.rate = 0.95;
-    var baseLang = bcp47.split("-")[0].toLowerCase();
-    var voices = window.speechSynthesis.getVoices();
-    var preferred = null;
-    for (var v = 0; v < voices.length; v++) {
-        if (voices[v].lang && voices[v].lang.toLowerCase().indexOf(baseLang) === 0) {
-            preferred = voices[v];
-            break;
-        }
-    }
-    if (preferred) utterance.voice = preferred;
-    window.speechSynthesis.speak(utterance);
-    setAssistStatus("🔊 Playing: \"" + text + "\"");
-}
-
-function copyAssistPhrase(phrase, langCode) {
-    var langName = getAssistLangName(langCode);
-    var text = (phrase.translations[langCode] || phrase.en) + " [" + langName + "] — " + phrase.en;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(
-            function () { setAssistStatus("📋 Copied: " + phrase.en); },
-            function () { fallbackAssistCopy(text, phrase); }
-        );
-    } else {
-        fallbackAssistCopy(text, phrase);
-    }
-}
-
-function fallbackAssistCopy(text, phrase) {
-    var ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-        document.execCommand("copy");
-        setAssistStatus("📋 Copied: " + phrase.en);
-    } catch (e) {
-        setAssistStatus("Could not copy automatically — select the phrase text manually.");
-    }
-    document.body.removeChild(ta);
-}
-
-function useAssistPhraseInSOS(phrase, langCode) {
-    var langName = getAssistLangName(langCode);
-    var translated = phrase.translations[langCode] || phrase.en;
-
-    var desc = byId("sos-description");
-    if (desc) {
-        desc.value = translated + " [" + langName + "] — " + phrase.en + " (via Multilingual Assistant)";
-    }
-
-    if (phrase.suggestedType) {
-        var typeSel = byId("sos-type");
-        if (typeSel) {
-            for (var i = 0; i < typeSel.options.length; i++) {
-                if (typeSel.options[i].value === phrase.suggestedType) {
-                    typeSel.selectedIndex = i;
-                    break;
-                }
-            }
-        }
-    }
-
-    var nav = document.querySelector('.nav-item[data-target="view-sos"]');
-    if (nav) nav.click();
-
-    setAssistStatus("🆘 Phrase added to the SOS form — complete the request and send it.");
-    var sosForm = byId("sos-form");
-    if (sosForm && sosForm.scrollIntoView) {
-        setTimeout(function () { sosForm.scrollIntoView({ behavior: "smooth", block: "start" }); }, 250);
-    }
-}
-
-function setAssistStatus(message) {
-    var statusEl = byId("assist-status");
-    if (statusEl) statusEl.textContent = message;
-}
-
-document.addEventListener("DOMContentLoaded", initAssist);

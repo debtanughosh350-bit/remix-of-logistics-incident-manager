@@ -33,9 +33,7 @@
             <a href="#" class="nav-item" data-target="view-vehicles" data-subtitle="Live vehicle monitoring">Vehicles</a>
             <a href="#" class="nav-item" data-target="view-incidents"
                 data-subtitle="Report, track and resolve field incidents">Incidents</a>
-<a href="#" class="nav-item" data-target="view-sos" data-subtitle="Emergency help requests">SOS Help</a>
-            <a href="#" class="nav-item" data-target="view-assist"
-                data-subtitle="Emergency phrases in 6 languages">Assist</a>
+            <a href="#" class="nav-item" data-target="view-sos" data-subtitle="Emergency help requests">SOS Help</a>
             <a href="#" class="nav-item" data-target="view-rescue"
                 data-subtitle="Rescue queues, resources and recommendations">Rescue</a>
             <a href="#" class="nav-item" data-target="view-alerts"
@@ -83,27 +81,27 @@
             <section class="stats">
 
                 <div class="card">
-                    <h3>🟢 Analysed Routes</h3>
-                    <h2 id="kpi-active-routes">0</h2>
-                    <p id="kpi-active-routes-note">No route analysed yet</p>
+                    <h3>🟢 Active Routes</h3>
+                    <h2>42</h2>
+                    <p>Currently accessible</p>
                 </div>
 
                 <div class="card">
                     <h3>🔴 Blocked Routes</h3>
-                    <h2 id="kpi-blocked-routes">0</h2>
-                    <p>Road blockage detected near route</p>
+                    <h2>7</h2>
+                    <p>Requires attention</p>
                 </div>
 
                 <div class="card">
                     <h3>🟠 High Risk Routes</h3>
-                    <h2 id="kpi-highrisk-routes">0</h2>
-                    <p>HIGH / CRITICAL route risk</p>
+                    <h2>13</h2>
+                    <p>Risk detected</p>
                 </div>
 
                 <div class="card">
-                    <h3>🚚 Dispatched Vehicles</h3>
-                    <h2 id="kpi-dispatched-vehicles">0</h2>
-                    <p id="kpi-dispatched-note">No active dispatches</p>
+                    <h3>🚚 Active Vehicles</h3>
+                    <h2>28</h2>
+                    <p>Currently in transit</p>
                 </div>
 
             </section>
@@ -291,17 +289,6 @@
 
             <section class="content-section">
                 <div class="section-header">
-                    <h2>🛡️ Route Risk Analysis</h2>
-                    <p>Live hazards from incidents, high-priority SOS requests and risk points.</p>
-                </div>
-                <div id="route-intel-panel">
-                    <p>No route has been calculated yet.</p>
-                </div>
-            </section>
-
-
-            <section class="content-section">
-                <div class="section-header">
                     <h2>ℹ️ How routing works</h2>
                     <p>
                         Open the Dashboard to click a start point on the map, search a destination and
@@ -318,24 +305,24 @@
 
             <section class="stats">
                 <div class="card">
-                    <h3>🚚 Total Vehicles</h3>
-                    <h2 id="kpi-veh-total">0</h2>
-                    <p>Vehicles in the fleet dataset</p>
+                    <h3>🚚 Active Vehicles</h3>
+                    <h2 id="kpi-active-vehicles">0</h2>
+                    <p>In transit or dispatched</p>
                 </div>
                 <div class="card">
                     <h3>🟢 Available</h3>
-                    <h2 id="kpi-veh-available">0</h2>
-                    <p>Ready for assignment</p>
+                    <h2 id="kpi-available-vehicles">0</h2>
+                    <p>Ready for transportation</p>
                 </div>
                 <div class="card">
-                    <h3>🔴 Maintenance</h3>
-                    <h2 id="kpi-veh-maintenance">0</h2>
-                    <p>Not assignable</p>
+                    <h3>🚨 Dispatched</h3>
+                    <h2 id="kpi-dispatched-vehicles">0</h2>
+                    <p>Assigned to active SOS/incidents</p>
                 </div>
                 <div class="card">
-                    <h3>🟠 Dispatched</h3>
-                    <h2 id="kpi-veh-dispatched">0</h2>
-                    <p>Assigned to an active SOS</p>
+                    <h3>🟠 Delayed</h3>
+                    <h2 id="kpi-delayed-vehicles">0</h2>
+                    <p>Facing route disruptions</p>
                 </div>
             </section>
 
@@ -354,15 +341,14 @@
                                 <th>Location</th>
                                 <th>Destination</th>
                                 <th>Status</th>
-                                <th>Assignment</th>
-                                <th>Dispatch</th>
                                 <th>Route</th>
                                 <th>Last Updated</th>
+                                <th>Dispatch</th>
                             </tr>
                         </thead>
                         <tbody id="vehicles-table-body">
                             <tr>
-                                <td colspan="9">Loading vehicles…</td>
+                                <td colspan="8">Loading vehicles…</td>
                             </tr>
                         </tbody>
                     </table>
@@ -550,32 +536,6 @@
                 <div id="sos-list"></div>
             </section>
 
-</div>
-
-
-        <!-- ================= MULTILINGUAL ASSISTANT ================= -->
-        <div id="view-assist" class="view-section">
-
-            <section class="incident-section">
-                <div class="section-title">
-                    <h2>🌐 Multilingual Emergency Assistant</h2>
-                    <p>Emergency phrases in 6 languages — pick a language, tap a phrase to hear it, copy it, or send it
-                        into an SOS request</p>
-                </div>
-
-                <div class="assist-langs" id="assist-langs"></div>
-
-                <div class="assist-phrases" id="assist-phrases"></div>
-
-                <p id="assist-status" class="assist-status"></p>
-
-                <p class="assist-note">
-                    ⚠️ Prototype phrasebook for demo use — translations are community-level and should be verified
-                    with a fluent speaker before real-world use. Speech output uses the voices installed on this
-                    device. Always contact local emergency services.
-                </p>
-            </section>
-
         </div>
 
 
@@ -694,43 +654,28 @@
             <section class="stats">
                 <div class="card">
                     <h3>📊 Logistics Report</h3>
-                    <p>Analysed Routes: <b id="rep-active-routes">0</b></p>
-                    <p>Blocked Routes: <b id="rep-blocked-routes">0</b></p>
-                    <p>High Risk Routes: <b id="rep-highrisk-routes">0</b></p>
-                    <p>Dispatched Vehicles: <b id="rep-dispatched-vehicles">0</b></p>
+                    <p>Active Routes: <b id="report-active-routes">0</b></p>
+                    <p>Blocked Routes: <b id="report-blocked-routes">0</b></p>
+                    <p>High Risk Routes: <b id="report-high-risk-routes">0</b></p>
+                    <p>Active Vehicles: <b id="report-active-vehicles">0</b></p>
                 </div>
 
                 <div class="card">
-                    <h3>🚛 Vehicle Utilization</h3>
-                    <p>Total: <b id="rep-veh-total">0</b></p>
-                    <p>Available: <b id="rep-veh-available">0</b></p>
-                    <p>Dispatched: <b id="rep-veh-dispatched">0</b></p>
-                    <p>Maintenance: <b id="rep-veh-maintenance">0</b></p>
-                    <p>Utilization: <b id="rep-veh-utilization">0%</b></p>
+                    <h3>📈 Accessibility Performance</h3>
+                    <p>Overall regional accessibility is continuously monitored across the North Eastern Region.</p>
                 </div>
 
                 <div class="card">
                     <h3>🚧 Reported Incidents</h3>
                     <h2 id="kpi-open-incidents-report">0</h2>
-                    <p>Open incidents (total logged: <b id="rep-incidents-total">0</b>)</p>
+                    <p>Open incidents in the current session</p>
                 </div>
 
                 <div class="card">
                     <h3>🆘 Emergency Requests</h3>
-                    <p>Total SOS: <b id="rep-sos-total">0</b></p>
-                    <p>Active SOS: <b id="rep-sos-active">0</b></p>
-                    <p>Critical / High: <b id="rep-sos-critical-high">0</b></p>
-                    <p>Resource shortages: <b id="rep-shortages">0</b></p>
+                    <p>Dispatched Vehicles: <b id="report-dispatched-vehicles">0</b></p>
+                    <p>See the Rescue section for the live SOS priority queue.</p>
                 </div>
-            </section>
-
-            <section class="content-section">
-                <div class="section-header">
-                    <h2>🧾 Live Summary</h2>
-                    <p>Generated from the data stored in this prototype session</p>
-                </div>
-                <div id="report-incident-breakdown"></div>
-                <div id="report-dispatch-breakdown"></div>
             </section>
 
         </div>

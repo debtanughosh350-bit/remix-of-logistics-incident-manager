@@ -194,7 +194,9 @@ function initMap() {
         return map;
     }
 
-    const leafletMap = L.map("map").setView([27.5, 93.5], 6);
+    // North Eastern Region of India (Sikkim + the seven sister states).
+    const leafletMap = L.map("map", { zoomControl: true }).setView(NER_CENTER, 6);
+    leafletMap.fitBounds(NER_BOUNDS, { padding: [10, 10] });
 
     // "osm-intl" = OpenStreetMap tiles with internationalised (Latin/English)
     // labels. The plain OSM tile server renders labels in each country's local
@@ -205,20 +207,74 @@ function initMap() {
         maxZoom: 19
     }).addTo(leafletMap);
 
+    L.control.scale({ imperial: false, position: "bottomright" }).addTo(leafletMap);
 
+    // Title badge (top-right) — purely informational.
+    const badge = L.control({ position: "topright" });
+    badge.onAdd = function () {
+        const div = L.DomUtil.create("div", "map-badge");
+        div.innerHTML =
+            "<strong>NER Disaster &amp; Accessibility Map</strong>" +
+            '<span class="map-badge-live">● Live Prototype</span>';
+        L.DomEvent.disableClickPropagation(div);
+        return div;
+    };
+    badge.addTo(leafletMap);
+
+    // Legend (bottom-left).
+    const legend = L.control({ position: "bottomleft" });
+    legend.onAdd = function () {
+        const div = L.DomUtil.create("div", "map-legend-control");
+        div.innerHTML =
+            "<strong>Legend</strong>" +
+            '<div><i style="background:#dc2626"></i>Critical incident / SOS</div>' +
+            '<div><i style="background:#f97316"></i>High risk</div>' +
+            '<div><i style="background:#eab308"></i>Medium risk</div>' +
+            '<div><i style="background:#16a34a"></i>Safe / normal</div>' +
+            '<div><i style="background:#1d4e89"></i>Rescue / emergency facility</div>' +
+            '<div><i style="background:#7c3aed"></i>Resource / relief point</div>' +
+            '<div><i style="background:#2563eb;border-radius:2px;height:4px;margin-top:5px"></i>Planned route</div>';
+        L.DomEvent.disableClickPropagation(div);
+        return div;
+    };
+    legend.addTo(leafletMap);
 
     leafletMap.on("click", function (event) {
         selectedStart = { lat: event.latlng.lat, lng: event.latlng.lng };
 
-        L.popup()
+        const nearby = getRiskInfoNear(event.latlng.lat, event.latlng.lng);
+        let riskHtml;
+        if (nearby.hazards.length) {
+            riskHtml =
+                '<div class="popup-risk popup-risk-' + nearby.level.toLowerCase() + '">' +
+                "⚠️ " + escapeHTML(nearby.level) + " risk nearby — " + nearby.hazards.length +
+                " hazard(s) within 3 km<br><small>" +
+                escapeHTML(nearby.hazards.slice(0, 3).map(function (h) {
+                    return h.label + " (" + h.distanceKm.toFixed(1) + " km)";
+                }).join(" · ")) +
+                "</small></div>";
+        } else {
+            riskHtml = '<div class="popup-risk popup-risk-low">🟢 No known hazards within 3 km</div>';
+        }
+
+        L.popup({ maxWidth: 260 })
             .setLatLng(event.latlng)
             .setContent(
-                "<b>Selected location</b><br>" +
-                formatLatLng(event.latlng.lat, event.latlng.lng) +
-                '<br><button onclick="checkAccessibility()">Check Accessibility</button>'
+                '<div class="map-popup"><b>📍 Selected Location</b><br>' +
+                "<small>Lat " + event.latlng.lat.toFixed(5) + ", Lng " + event.latlng.lng.toFixed(5) + "</small>" +
+                riskHtml +
+                '<button class="popup-btn" onclick="checkAccessibility()">♿ Check Accessibility</button></div>'
             )
             .openOn(leafletMap);
     });
+
+    // Keep tiles filling the container after layout changes.
+    window.addEventListener("resize", function () {
+        leafletMap.invalidateSize();
+    });
+    setTimeout(function () { leafletMap.invalidateSize(); }, 300);
+
+    renderDemoRiskPoints(leafletMap);
 
     return leafletMap;
 }

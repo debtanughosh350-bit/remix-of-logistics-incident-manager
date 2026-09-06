@@ -67,6 +67,22 @@ let lastRouteAnalyses = [];   // analysed OSRM alternatives (real API results on
 let selectedRouteAnalysisIndex = 0;
 let lastRouteRequest = null;  // { start, end }
 let demoRiskPoints = [];      // risk points created by showRiskPoints()
+let nerDemoRiskMarkers = [];  // static NER presentation markers
+
+// North Eastern Region view: Sikkim + Assam, Arunachal, Meghalaya, Manipur,
+// Mizoram, Nagaland, Tripura.
+const NER_CENTER = [26.2, 92.9];
+const NER_BOUNDS = [[22.0, 88.0], [29.5, 97.5]];
+
+// A handful of realistic DEMO hazard points so the command map is never empty
+// during a presentation. Clearly labelled as demo data — not a live feed.
+const NER_DEMO_RISK_POINTS = [
+    { lat: 26.95, lng: 94.17, label: "Majuli flood-prone zone (DEMO)", level: "High", type: "Flood" },
+    { lat: 25.18, lng: 93.02, label: "Dima Hasao landslide-prone stretch (DEMO)", level: "High", type: "Landslide" },
+    { lat: 27.33, lng: 88.61, label: "Gangtok hillside slope watch (DEMO)", level: "Medium", type: "Landslide" },
+    { lat: 24.82, lng: 93.94, label: "Imphal valley waterlogging (DEMO)", level: "Medium", type: "Flood" },
+    { lat: 25.57, lng: 91.88, label: "Shillong — roads clear (DEMO)", level: "Low", type: "Normal" }
+];
 
 let alertsCache = [];
 let currentAlertFilter = "all";
@@ -194,7 +210,9 @@ function initMap() {
         return map;
     }
 
-    const leafletMap = L.map("map").setView([27.5, 93.5], 6);
+    // North Eastern Region of India (Sikkim + the seven sister states).
+    const leafletMap = L.map("map", { zoomControl: true }).setView(NER_CENTER, 6);
+    leafletMap.fitBounds(NER_BOUNDS, { padding: [10, 10] });
 
     // "osm-intl" = OpenStreetMap tiles with internationalised (Latin/English)
     // labels. The plain OSM tile server renders labels in each country's local
@@ -205,20 +223,74 @@ function initMap() {
         maxZoom: 19
     }).addTo(leafletMap);
 
+    L.control.scale({ imperial: false, position: "bottomright" }).addTo(leafletMap);
 
+    // Title badge (top-right) — purely informational.
+    const badge = L.control({ position: "topright" });
+    badge.onAdd = function () {
+        const div = L.DomUtil.create("div", "map-badge");
+        div.innerHTML =
+            "<strong>NER Disaster &amp; Accessibility Map</strong>" +
+            '<span class="map-badge-live">● Live Prototype</span>';
+        L.DomEvent.disableClickPropagation(div);
+        return div;
+    };
+    badge.addTo(leafletMap);
+
+    // Legend (bottom-left).
+    const legend = L.control({ position: "bottomleft" });
+    legend.onAdd = function () {
+        const div = L.DomUtil.create("div", "map-legend-control");
+        div.innerHTML =
+            "<strong>Legend</strong>" +
+            '<div><i style="background:#dc2626"></i>Critical incident / SOS</div>' +
+            '<div><i style="background:#f97316"></i>High risk</div>' +
+            '<div><i style="background:#eab308"></i>Medium risk</div>' +
+            '<div><i style="background:#16a34a"></i>Safe / normal</div>' +
+            '<div><i style="background:#1d4e89"></i>Rescue / emergency facility</div>' +
+            '<div><i style="background:#7c3aed"></i>Resource / relief point</div>' +
+            '<div><i style="background:#2563eb;border-radius:2px;height:4px;margin-top:5px"></i>Planned route</div>';
+        L.DomEvent.disableClickPropagation(div);
+        return div;
+    };
+    legend.addTo(leafletMap);
 
     leafletMap.on("click", function (event) {
         selectedStart = { lat: event.latlng.lat, lng: event.latlng.lng };
 
-        L.popup()
+        const nearby = getRiskInfoNear(event.latlng.lat, event.latlng.lng);
+        let riskHtml;
+        if (nearby.hazards.length) {
+            riskHtml =
+                '<div class="popup-risk popup-risk-' + nearby.level.toLowerCase() + '">' +
+                "⚠️ " + escapeHTML(nearby.level) + " risk nearby — " + nearby.hazards.length +
+                " hazard(s) within 3 km<br><small>" +
+                escapeHTML(nearby.hazards.slice(0, 3).map(function (h) {
+                    return h.label + " (" + h.distanceKm.toFixed(1) + " km)";
+                }).join(" · ")) +
+                "</small></div>";
+        } else {
+            riskHtml = '<div class="popup-risk popup-risk-low">🟢 No known hazards within 3 km</div>';
+        }
+
+        L.popup({ maxWidth: 260 })
             .setLatLng(event.latlng)
             .setContent(
-                "<b>Selected location</b><br>" +
-                formatLatLng(event.latlng.lat, event.latlng.lng) +
-                '<br><button onclick="checkAccessibility()">Check Accessibility</button>'
+                '<div class="map-popup"><b>📍 Selected Location</b><br>' +
+                "<small>Lat " + event.latlng.lat.toFixed(5) + ", Lng " + event.latlng.lng.toFixed(5) + "</small>" +
+                riskHtml +
+                '<button class="popup-btn" onclick="checkAccessibility()">♿ Check Accessibility</button></div>'
             )
             .openOn(leafletMap);
     });
+
+    // Keep tiles filling the container after layout changes.
+    window.addEventListener("resize", function () {
+        leafletMap.invalidateSize();
+    });
+    setTimeout(function () { leafletMap.invalidateSize(); }, 300);
+
+    renderDemoRiskPoints(leafletMap);
 
     return leafletMap;
 }
@@ -228,10 +300,20 @@ function checkAccessibility() {
         setText("route-status", "Please click a location on the map first.");
         return;
     }
-    setText(
-        "location-display",
-        "📍 Selected: " + formatLatLng(selectedStart.lat, selectedStart.lng)
-    );
+    const label = formatLatLng(selectedStart.lat, selectedStart.lng);
+    setText("location-display", "📍 Selected: " + label);
+    setText("selected-location", label);
+
+    const nearby = getRiskInfoNear(selectedStart.lat, selectedStart.lng);
+    setText("risk", nearby.hazards.length ? nearby.level + " (" + nearby.hazards.length + " hazard(s) within 3 km)" : "Low (no known hazards nearby)");
+    setText("road", nearby.hazards.some(function (h) { return /block|landslide|bridge|road/i.test(h.label); }) ? "Disruption reported nearby" : "No disruption reported");
+    setText("hospital", "Use 'Find Nearby Facilities' to check");
+    setText("overall-status",
+        nearby.hazards.length
+            ? "Location set. " + nearby.level + " hazard risk nearby: " + nearby.hazards.slice(0, 2).map(function (h) { return h.label; }).join(", ") + ". Search a destination to calculate a risk-aware route."
+            : "Location set. No known hazards within 3 km. Search a destination to calculate a risk-aware route.");
+
+    if (map) map.closePopup();
     setText("route-status", "Location set. Choose a destination or find nearby facilities.");
 }
 
@@ -529,6 +611,289 @@ async function searchDestination() {
     }
 
     setText("route-status", "Destination set: " + place.display_name);
+}
+
+/* ==========================================================================
+   6b. ROUTE RISK ANALYSIS (rule-based, transparent — not an ML model)
+   ========================================================================== */
+
+const HAZARD_RADIUS_KM = 3;
+const HAZARD_WEIGHTS = { CRITICAL: 30, HIGH: 20, MEDIUM: 10, LOW: 4 };
+const RISK_COLORS = { CRITICAL: "#dc2626", HIGH: "#f97316", MEDIUM: "#eab308", LOW: "#16a34a" };
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Distance from point P to segment AB using a local equirectangular projection.
+function pointToSegmentKm(p, a, b) {
+    const cosLat = Math.cos(p.lat * Math.PI / 180);
+    const kmPerDeg = 111.32;
+    const ax = (a.lng - p.lng) * cosLat * kmPerDeg, ay = (a.lat - p.lat) * kmPerDeg;
+    const bx = (b.lng - p.lng) * cosLat * kmPerDeg, by = (b.lat - p.lat) * kmPerDeg;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 ? -(ax * dx + ay * dy) / len2 : 0;
+    t = clamp(t, 0, 1);
+    const cx = ax + t * dx, cy = ay + t * dy;
+    return Math.sqrt(cx * cx + cy * cy);
+}
+
+function minDistanceToRouteKm(point, coords) {
+    let best = Infinity;
+    for (let i = 0; i < coords.length - 1; i++) {
+        const d = pointToSegmentKm(point, coords[i], coords[i + 1]);
+        if (d < best) best = d;
+    }
+    if (coords.length === 1) best = haversineKm(point.lat, point.lng, coords[0].lat, coords[0].lng);
+    return best;
+}
+
+function normalizeSeverity(value) {
+    const v = String(value || "").toUpperCase();
+    if (v === "CRITICAL" || v === "HIGH" || v === "MEDIUM" || v === "LOW") return v;
+    return "MEDIUM";
+}
+
+// Hazards = unresolved incidents + HIGH/CRITICAL SOS + risk points (demo + analysed).
+function collectRouteHazards() {
+    const hazards = [];
+
+    getSavedIncidents().forEach(function (i) {
+        if (i.status === "RESOLVED" || i.latitude == null || i.longitude == null) return;
+        hazards.push({
+            lat: Number(i.latitude), lng: Number(i.longitude),
+            type: i.type || "Incident", label: i.type || "Incident",
+            severity: normalizeSeverity(i.severity), source: "incident"
+        });
+    });
+
+    getSavedSOS().forEach(function (s) {
+        if (s.status === "RESOLVED" || s.latitude == null || s.longitude == null) return;
+        if (s.priorityLevel !== "CRITICAL" && s.priorityLevel !== "HIGH") return;
+        hazards.push({
+            lat: Number(s.latitude), lng: Number(s.longitude),
+            type: "SOS", label: "SOS: " + (s.emergencyType || "Emergency"),
+            severity: s.priorityLevel, source: "sos"
+        });
+    });
+
+    NER_DEMO_RISK_POINTS.concat(demoRiskPoints).forEach(function (r) {
+        if (r.type === "Normal") return;
+        hazards.push({
+            lat: r.lat, lng: r.lng, type: r.type || "Risk point", label: r.label,
+            severity: normalizeSeverity(r.level), source: "risk"
+        });
+    });
+
+    return hazards;
+}
+
+function classifyRiskScore(score) {
+    if (score >= 60) return "CRITICAL";
+    if (score >= 35) return "HIGH";
+    if (score >= 15) return "MEDIUM";
+    return "LOW";
+}
+
+function scoreHazards(hazardsNear) {
+    let score = 0;
+    hazardsNear.forEach(function (h) {
+        const weight = HAZARD_WEIGHTS[h.severity] || 10;
+        const proximity = h.distanceKm <= 0.5 ? 1 : h.distanceKm <= 1.5 ? 0.6 : 0.3;
+        score += weight * proximity;
+    });
+    return clamp(Math.round(score), 0, 100);
+}
+
+// Risk summary around a single point (used by the map click popup).
+function getRiskInfoNear(lat, lng) {
+    const near = collectRouteHazards().map(function (h) {
+        return Object.assign({}, h, { distanceKm: haversineKm(lat, lng, h.lat, h.lng) });
+    }).filter(function (h) { return h.distanceKm <= HAZARD_RADIUS_KM; })
+      .sort(function (a, b) { return a.distanceKm - b.distanceKm; });
+    const score = scoreHazards(near);
+    return { hazards: near, score: score, level: classifyRiskScore(score) };
+}
+
+function isSeriousHazard(h) {
+    return (h.severity === "CRITICAL" || h.severity === "HIGH" || /block|flood|landslide|bridge/i.test(h.type)) && h.distanceKm <= 1.5;
+}
+
+function buildRouteAnalysis(route, index) {
+    const coords = route.geometry.coordinates.map(function (c) { return { lat: c[1], lng: c[0] }; });
+    const distanceKm = route.distance / 1000;
+    const durationMin = route.duration / 60;
+
+    const hazards = collectRouteHazards().map(function (h) {
+        return Object.assign({}, h, { distanceKm: minDistanceToRouteKm(h, coords) });
+    }).filter(function (h) { return h.distanceKm <= HAZARD_RADIUS_KM; })
+      .sort(function (a, b) { return a.distanceKm - b.distanceKm; });
+
+    const riskScore = scoreHazards(hazards);
+    const riskLevel = classifyRiskScore(riskScore);
+    const types = [];
+    hazards.forEach(function (h) { if (types.indexOf(h.type) === -1) types.push(h.type); });
+    const serious = hazards.filter(isSeriousHazard);
+
+    return {
+        index: index, raw: route, coords: coords,
+        distanceKm: distanceKm, durationMin: durationMin,
+        hazards: hazards, hazardTypes: types, serious: serious,
+        riskScore: riskScore, riskLevel: riskLevel,
+        riskLabel: riskLevel === "LOW" ? "Safe route" : riskLevel.charAt(0) + riskLevel.slice(1).toLowerCase() + "-risk route",
+        color: RISK_COLORS[riskLevel]
+    };
+}
+
+// Prefer the lowest-risk genuine alternative; break ties by duration.
+function pickSaferRouteIndex(analyses) {
+    let best = 0;
+    analyses.forEach(function (a, i) {
+        const b = analyses[best];
+        if (a.riskScore < b.riskScore || (a.riskScore === b.riskScore && a.durationMin < b.durationMin)) best = i;
+    });
+    return best;
+}
+
+function drawRouteAnalysis(analysis) {
+    clearCurrentRoute();
+    if (!map || !analysis) return;
+    currentRouteLine = L.polyline(analysis.coords.map(function (c) { return [c.lat, c.lng]; }), {
+        color: analysis.color, weight: 6, opacity: 0.9
+    }).addTo(map);
+    map.fitBounds(currentRouteLine.getBounds(), { padding: [30, 30] });
+
+    const score = calculateAccessibilityScore(analysis.distanceKm, analysis.durationMin);
+    setText("dashboard-score", score + "/100");
+    setText("dashboard-risk", analysis.riskLevel + " (" + analysis.riskScore + "/100)");
+    setText("risk", analysis.riskLevel + " — " + analysis.hazards.length + " hazard(s) near route");
+    setText("overall-status", analysis.riskLabel + ": " + analysis.distanceKm.toFixed(1) + " km, " +
+        Math.round(analysis.durationMin) + " min, accessibility score " + score + "/100.");
+}
+
+function selectRouteAnalysis(index) {
+    if (!lastRouteAnalyses[index]) return;
+    selectedRouteAnalysisIndex = index;
+    const chosen = lastRouteAnalyses[index];
+    setText("dashboard-distance", chosen.distanceKm.toFixed(1) + " km");
+    setText("dashboard-time", Math.round(chosen.durationMin) + " min");
+    drawRouteAnalysis(chosen);
+    renderRouteIntelligence();
+}
+
+// Re-run hazard analysis on the stored OSRM routes whenever data changes.
+function updateRouteRiskAnalysis() {
+    if (!lastRouteAnalyses.length) {
+        renderRouteIntelligence();
+        return;
+    }
+    lastRouteAnalyses = lastRouteAnalyses.map(function (a) { return buildRouteAnalysis(a.raw, a.index); });
+    if (!lastRouteAnalyses[selectedRouteAnalysisIndex]) selectedRouteAnalysisIndex = 0;
+    const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
+    if (currentRouteLine) currentRouteLine.setStyle({ color: chosen.color });
+    setText("dashboard-risk", chosen.riskLevel + " (" + chosen.riskScore + "/100)");
+    renderRouteIntelligence();
+    if (typeof renderReports === "function") renderReports();
+}
+
+function routeCardHTML(title, a, extra) {
+    if (!a) {
+        return '<div class="route-intel-card"><h4>' + title + "</h4><p class=\"incident-empty\">No route analysed yet.</p></div>";
+    }
+    return (
+        '<div class="route-intel-card risk-' + a.riskLevel.toLowerCase() + '">' +
+        "<h4>" + title + "</h4>" +
+        "<p><b>Distance:</b> " + a.distanceKm.toFixed(1) + " km &nbsp; <b>ETA:</b> " + Math.round(a.durationMin) + " min</p>" +
+        "<p><b>Risk:</b> " + escapeHTML(a.riskLevel) + " (score " + a.riskScore + "/100) &nbsp; <b>Hazards:</b> " + a.hazards.length + "</p>" +
+        "<p><b>Types:</b> " + (a.hazardTypes.length ? escapeHTML(a.hazardTypes.join(", ")) : "None detected") + "</p>" +
+        (extra || "") +
+        "</div>"
+    );
+}
+
+function renderRouteIntelligence() {
+    const targets = ["route-intel-panel", "route-intel-panel-route"].map(byId).filter(Boolean);
+    if (!targets.length) return;
+
+    let html;
+    if (!lastRouteAnalyses.length) {
+        html = '<p class="incident-empty">No route analysed yet. Click a start point on the map, search a destination and press "Find Accessible Route".</p>';
+    } else {
+        const fastest = lastRouteAnalyses.reduce(function (b, a) { return a.durationMin < b.durationMin ? a : b; });
+        const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
+        const hasAlt = lastRouteAnalyses.length > 1;
+
+        let warning = "";
+        if (chosen.serious.length) {
+            warning =
+                '<div class="route-warning">⚠️ <b>High-risk route detected</b><br>' +
+                escapeHTML(chosen.serious.slice(0, 3).map(function (h) {
+                    return h.label + " (" + h.severity + ", " + h.distanceKm.toFixed(1) + " km from route)";
+                }).join("; ")) + "</div>";
+        }
+        const hazardList = chosen.hazards.length
+            ? "<ul class=\"route-hazard-list\">" + chosen.hazards.slice(0, 6).map(function (h) {
+                return "<li>" + escapeHTML(h.label) + " — " + escapeHTML(h.severity) + ", " + h.distanceKm.toFixed(1) + " km</li>";
+            }).join("") + "</ul>"
+            : '<p class="incident-empty">No hazards within ' + HAZARD_RADIUS_KM + " km of this route.</p>";
+
+        const altNote = hasAlt
+            ? "<p><small>" + lastRouteAnalyses.length + " genuine OSRM alternatives found. " +
+              lastRouteAnalyses.map(function (a, i) {
+                  return '<button class="route-pick-btn' + (i === selectedRouteAnalysisIndex ? " active" : "") +
+                      '" onclick="selectRouteAnalysis(' + i + ')">Route ' + (i + 1) + " · " + a.riskLevel + "</button>";
+              }).join(" ") + "</small></p>"
+            : "<p><small>OSRM returned a single route — no alternative exists, so the safety analysis below applies to the current route.</small></p>";
+
+        html =
+            '<div class="route-intel-grid">' +
+            routeCardHTML("⚡ Fastest Route", fastest) +
+            routeCardHTML("🛡️ Safety Analysis" + (hasAlt ? " (safer route)" : ""), chosen, warning + hazardList + altNote) +
+            routeCardHTML("♿ Accessible Route", chosen, "<p><b>Accessibility score:</b> " + escapeHTML(byId("score") ? byId("score").textContent : "--") + "</p>") +
+            "</div>";
+    }
+    targets.forEach(function (el) { el.innerHTML = html; });
+}
+
+// Button in the Route Intelligence view.
+function analyzeRoute() {
+    if (!lastRouteAnalyses.length) {
+        setHTML("routeResult", "No route calculated yet. Open the <b>Dashboard</b>, click a start point on the map, search a destination and press <b>Find Accessible Route</b>.");
+        renderRouteIntelligence();
+        return;
+    }
+    const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
+    setHTML("routeResult",
+        "<b>" + escapeHTML(chosen.riskLabel) + "</b> — " + chosen.distanceKm.toFixed(1) + " km, " +
+        Math.round(chosen.durationMin) + " min, risk " + chosen.riskLevel + " (" + chosen.riskScore + "/100), " +
+        chosen.hazards.length + " hazard(s) nearby.");
+    renderRouteIntelligence();
+}
+
+function renderDemoRiskPoints(targetMap) {
+    const m = targetMap || map;
+    if (!m) return;
+    nerDemoRiskMarkers.forEach(function (mk) { m.removeLayer(mk); });
+    nerDemoRiskMarkers = [];
+    NER_DEMO_RISK_POINTS.forEach(function (r) {
+        const color = RISK_COLORS[normalizeSeverity(r.level)];
+        const icon = L.divIcon({
+            className: "",
+            html: '<span class="incident-marker-dot" style="background:' + color + '"></span>',
+            iconSize: [16, 16], iconAnchor: [8, 8], popupAnchor: [0, -8]
+        });
+        const mk = L.marker([r.lat, r.lng], { icon: icon }).addTo(m)
+            .bindPopup("<b>⚠️ " + escapeHTML(r.label) + "</b><br>Risk level: " + escapeHTML(r.level) +
+                "<br><small>Demo presentation data — not a live feed.</small>");
+        nerDemoRiskMarkers.push(mk);
+    });
 }
 
 /* ==========================================================================

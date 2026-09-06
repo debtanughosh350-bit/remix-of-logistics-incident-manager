@@ -67,6 +67,22 @@ let lastRouteAnalyses = [];   // analysed OSRM alternatives (real API results on
 let selectedRouteAnalysisIndex = 0;
 let lastRouteRequest = null;  // { start, end }
 let demoRiskPoints = [];      // risk points created by showRiskPoints()
+let nerDemoRiskMarkers = [];  // static NER presentation markers
+
+// North Eastern Region view: Sikkim + Assam, Arunachal, Meghalaya, Manipur,
+// Mizoram, Nagaland, Tripura.
+const NER_CENTER = [26.2, 92.9];
+const NER_BOUNDS = [[22.0, 88.0], [29.5, 97.5]];
+
+// A handful of realistic DEMO hazard points so the command map is never empty
+// during a presentation. Clearly labelled as demo data — not a live feed.
+const NER_DEMO_RISK_POINTS = [
+    { lat: 26.95, lng: 94.17, label: "Majuli flood-prone zone (DEMO)", level: "High", type: "Flood" },
+    { lat: 25.18, lng: 93.02, label: "Dima Hasao landslide-prone stretch (DEMO)", level: "High", type: "Landslide" },
+    { lat: 27.33, lng: 88.61, label: "Gangtok hillside slope watch (DEMO)", level: "Medium", type: "Landslide" },
+    { lat: 24.82, lng: 93.94, label: "Imphal valley waterlogging (DEMO)", level: "Medium", type: "Flood" },
+    { lat: 25.57, lng: 91.88, label: "Shillong — roads clear (DEMO)", level: "Low", type: "Normal" }
+];
 
 let alertsCache = [];
 let currentAlertFilter = "all";

@@ -614,6 +614,289 @@ async function searchDestination() {
 }
 
 /* ==========================================================================
+   6b. ROUTE RISK ANALYSIS (rule-based, transparent — not an ML model)
+   ========================================================================== */
+
+const HAZARD_RADIUS_KM = 3;
+const HAZARD_WEIGHTS = { CRITICAL: 30, HIGH: 20, MEDIUM: 10, LOW: 4 };
+const RISK_COLORS = { CRITICAL: "#dc2626", HIGH: "#f97316", MEDIUM: "#eab308", LOW: "#16a34a" };
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Distance from point P to segment AB using a local equirectangular projection.
+function pointToSegmentKm(p, a, b) {
+    const cosLat = Math.cos(p.lat * Math.PI / 180);
+    const kmPerDeg = 111.32;
+    const ax = (a.lng - p.lng) * cosLat * kmPerDeg, ay = (a.lat - p.lat) * kmPerDeg;
+    const bx = (b.lng - p.lng) * cosLat * kmPerDeg, by = (b.lat - p.lat) * kmPerDeg;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 ? -(ax * dx + ay * dy) / len2 : 0;
+    t = clamp(t, 0, 1);
+    const cx = ax + t * dx, cy = ay + t * dy;
+    return Math.sqrt(cx * cx + cy * cy);
+}
+
+function minDistanceToRouteKm(point, coords) {
+    let best = Infinity;
+    for (let i = 0; i < coords.length - 1; i++) {
+        const d = pointToSegmentKm(point, coords[i], coords[i + 1]);
+        if (d < best) best = d;
+    }
+    if (coords.length === 1) best = haversineKm(point.lat, point.lng, coords[0].lat, coords[0].lng);
+    return best;
+}
+
+function normalizeSeverity(value) {
+    const v = String(value || "").toUpperCase();
+    if (v === "CRITICAL" || v === "HIGH" || v === "MEDIUM" || v === "LOW") return v;
+    return "MEDIUM";
+}
+
+// Hazards = unresolved incidents + HIGH/CRITICAL SOS + risk points (demo + analysed).
+function collectRouteHazards() {
+    const hazards = [];
+
+    getSavedIncidents().forEach(function (i) {
+        if (i.status === "RESOLVED" || i.latitude == null || i.longitude == null) return;
+        hazards.push({
+            lat: Number(i.latitude), lng: Number(i.longitude),
+            type: i.type || "Incident", label: i.type || "Incident",
+            severity: normalizeSeverity(i.severity), source: "incident"
+        });
+    });
+
+    getSavedSOS().forEach(function (s) {
+        if (s.status === "RESOLVED" || s.latitude == null || s.longitude == null) return;
+        if (s.priorityLevel !== "CRITICAL" && s.priorityLevel !== "HIGH") return;
+        hazards.push({
+            lat: Number(s.latitude), lng: Number(s.longitude),
+            type: "SOS", label: "SOS: " + (s.emergencyType || "Emergency"),
+            severity: s.priorityLevel, source: "sos"
+        });
+    });
+
+    NER_DEMO_RISK_POINTS.concat(demoRiskPoints).forEach(function (r) {
+        if (r.type === "Normal") return;
+        hazards.push({
+            lat: r.lat, lng: r.lng, type: r.type || "Risk point", label: r.label,
+            severity: normalizeSeverity(r.level), source: "risk"
+        });
+    });
+
+    return hazards;
+}
+
+function classifyRiskScore(score) {
+    if (score >= 60) return "CRITICAL";
+    if (score >= 35) return "HIGH";
+    if (score >= 15) return "MEDIUM";
+    return "LOW";
+}
+
+function scoreHazards(hazardsNear) {
+    let score = 0;
+    hazardsNear.forEach(function (h) {
+        const weight = HAZARD_WEIGHTS[h.severity] || 10;
+        const proximity = h.distanceKm <= 0.5 ? 1 : h.distanceKm <= 1.5 ? 0.6 : 0.3;
+        score += weight * proximity;
+    });
+    return clamp(Math.round(score), 0, 100);
+}
+
+// Risk summary around a single point (used by the map click popup).
+function getRiskInfoNear(lat, lng) {
+    const near = collectRouteHazards().map(function (h) {
+        return Object.assign({}, h, { distanceKm: haversineKm(lat, lng, h.lat, h.lng) });
+    }).filter(function (h) { return h.distanceKm <= HAZARD_RADIUS_KM; })
+      .sort(function (a, b) { return a.distanceKm - b.distanceKm; });
+    const score = scoreHazards(near);
+    return { hazards: near, score: score, level: classifyRiskScore(score) };
+}
+
+function isSeriousHazard(h) {
+    return (h.severity === "CRITICAL" || h.severity === "HIGH" || /block|flood|landslide|bridge/i.test(h.type)) && h.distanceKm <= 1.5;
+}
+
+function buildRouteAnalysis(route, index) {
+    const coords = route.geometry.coordinates.map(function (c) { return { lat: c[1], lng: c[0] }; });
+    const distanceKm = route.distance / 1000;
+    const durationMin = route.duration / 60;
+
+    const hazards = collectRouteHazards().map(function (h) {
+        return Object.assign({}, h, { distanceKm: minDistanceToRouteKm(h, coords) });
+    }).filter(function (h) { return h.distanceKm <= HAZARD_RADIUS_KM; })
+      .sort(function (a, b) { return a.distanceKm - b.distanceKm; });
+
+    const riskScore = scoreHazards(hazards);
+    const riskLevel = classifyRiskScore(riskScore);
+    const types = [];
+    hazards.forEach(function (h) { if (types.indexOf(h.type) === -1) types.push(h.type); });
+    const serious = hazards.filter(isSeriousHazard);
+
+    return {
+        index: index, raw: route, coords: coords,
+        distanceKm: distanceKm, durationMin: durationMin,
+        hazards: hazards, hazardTypes: types, serious: serious,
+        riskScore: riskScore, riskLevel: riskLevel,
+        riskLabel: riskLevel === "LOW" ? "Safe route" : riskLevel.charAt(0) + riskLevel.slice(1).toLowerCase() + "-risk route",
+        color: RISK_COLORS[riskLevel]
+    };
+}
+
+// Prefer the lowest-risk genuine alternative; break ties by duration.
+function pickSaferRouteIndex(analyses) {
+    let best = 0;
+    analyses.forEach(function (a, i) {
+        const b = analyses[best];
+        if (a.riskScore < b.riskScore || (a.riskScore === b.riskScore && a.durationMin < b.durationMin)) best = i;
+    });
+    return best;
+}
+
+function drawRouteAnalysis(analysis) {
+    clearCurrentRoute();
+    if (!map || !analysis) return;
+    currentRouteLine = L.polyline(analysis.coords.map(function (c) { return [c.lat, c.lng]; }), {
+        color: analysis.color, weight: 6, opacity: 0.9
+    }).addTo(map);
+    map.fitBounds(currentRouteLine.getBounds(), { padding: [30, 30] });
+
+    const score = calculateAccessibilityScore(analysis.distanceKm, analysis.durationMin);
+    setText("dashboard-score", score + "/100");
+    setText("dashboard-risk", analysis.riskLevel + " (" + analysis.riskScore + "/100)");
+    setText("risk", analysis.riskLevel + " — " + analysis.hazards.length + " hazard(s) near route");
+    setText("overall-status", analysis.riskLabel + ": " + analysis.distanceKm.toFixed(1) + " km, " +
+        Math.round(analysis.durationMin) + " min, accessibility score " + score + "/100.");
+}
+
+function selectRouteAnalysis(index) {
+    if (!lastRouteAnalyses[index]) return;
+    selectedRouteAnalysisIndex = index;
+    const chosen = lastRouteAnalyses[index];
+    setText("dashboard-distance", chosen.distanceKm.toFixed(1) + " km");
+    setText("dashboard-time", Math.round(chosen.durationMin) + " min");
+    drawRouteAnalysis(chosen);
+    renderRouteIntelligence();
+}
+
+// Re-run hazard analysis on the stored OSRM routes whenever data changes.
+function updateRouteRiskAnalysis() {
+    if (!lastRouteAnalyses.length) {
+        renderRouteIntelligence();
+        return;
+    }
+    lastRouteAnalyses = lastRouteAnalyses.map(function (a) { return buildRouteAnalysis(a.raw, a.index); });
+    if (!lastRouteAnalyses[selectedRouteAnalysisIndex]) selectedRouteAnalysisIndex = 0;
+    const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
+    if (currentRouteLine) currentRouteLine.setStyle({ color: chosen.color });
+    setText("dashboard-risk", chosen.riskLevel + " (" + chosen.riskScore + "/100)");
+    renderRouteIntelligence();
+    if (typeof renderReports === "function") renderReports();
+}
+
+function routeCardHTML(title, a, extra) {
+    if (!a) {
+        return '<div class="route-intel-card"><h4>' + title + "</h4><p class=\"incident-empty\">No route analysed yet.</p></div>";
+    }
+    return (
+        '<div class="route-intel-card risk-' + a.riskLevel.toLowerCase() + '">' +
+        "<h4>" + title + "</h4>" +
+        "<p><b>Distance:</b> " + a.distanceKm.toFixed(1) + " km &nbsp; <b>ETA:</b> " + Math.round(a.durationMin) + " min</p>" +
+        "<p><b>Risk:</b> " + escapeHTML(a.riskLevel) + " (score " + a.riskScore + "/100) &nbsp; <b>Hazards:</b> " + a.hazards.length + "</p>" +
+        "<p><b>Types:</b> " + (a.hazardTypes.length ? escapeHTML(a.hazardTypes.join(", ")) : "None detected") + "</p>" +
+        (extra || "") +
+        "</div>"
+    );
+}
+
+function renderRouteIntelligence() {
+    const targets = ["route-intel-panel", "route-intel-panel-route"].map(byId).filter(Boolean);
+    if (!targets.length) return;
+
+    let html;
+    if (!lastRouteAnalyses.length) {
+        html = '<p class="incident-empty">No route analysed yet. Click a start point on the map, search a destination and press "Find Accessible Route".</p>';
+    } else {
+        const fastest = lastRouteAnalyses.reduce(function (b, a) { return a.durationMin < b.durationMin ? a : b; });
+        const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
+        const hasAlt = lastRouteAnalyses.length > 1;
+
+        let warning = "";
+        if (chosen.serious.length) {
+            warning =
+                '<div class="route-warning">⚠️ <b>High-risk route detected</b><br>' +
+                escapeHTML(chosen.serious.slice(0, 3).map(function (h) {
+                    return h.label + " (" + h.severity + ", " + h.distanceKm.toFixed(1) + " km from route)";
+                }).join("; ")) + "</div>";
+        }
+        const hazardList = chosen.hazards.length
+            ? "<ul class=\"route-hazard-list\">" + chosen.hazards.slice(0, 6).map(function (h) {
+                return "<li>" + escapeHTML(h.label) + " — " + escapeHTML(h.severity) + ", " + h.distanceKm.toFixed(1) + " km</li>";
+            }).join("") + "</ul>"
+            : '<p class="incident-empty">No hazards within ' + HAZARD_RADIUS_KM + " km of this route.</p>";
+
+        const altNote = hasAlt
+            ? "<p><small>" + lastRouteAnalyses.length + " genuine OSRM alternatives found. " +
+              lastRouteAnalyses.map(function (a, i) {
+                  return '<button class="route-pick-btn' + (i === selectedRouteAnalysisIndex ? " active" : "") +
+                      '" onclick="selectRouteAnalysis(' + i + ')">Route ' + (i + 1) + " · " + a.riskLevel + "</button>";
+              }).join(" ") + "</small></p>"
+            : "<p><small>OSRM returned a single route — no alternative exists, so the safety analysis below applies to the current route.</small></p>";
+
+        html =
+            '<div class="route-intel-grid">' +
+            routeCardHTML("⚡ Fastest Route", fastest) +
+            routeCardHTML("🛡️ Safety Analysis" + (hasAlt ? " (safer route)" : ""), chosen, warning + hazardList + altNote) +
+            routeCardHTML("♿ Accessible Route", chosen, "<p><b>Accessibility score:</b> " + escapeHTML(byId("score") ? byId("score").textContent : "--") + "</p>") +
+            "</div>";
+    }
+    targets.forEach(function (el) { el.innerHTML = html; });
+}
+
+// Button in the Route Intelligence view.
+function analyzeRoute() {
+    if (!lastRouteAnalyses.length) {
+        setHTML("routeResult", "No route calculated yet. Open the <b>Dashboard</b>, click a start point on the map, search a destination and press <b>Find Accessible Route</b>.");
+        renderRouteIntelligence();
+        return;
+    }
+    const chosen = lastRouteAnalyses[selectedRouteAnalysisIndex];
+    setHTML("routeResult",
+        "<b>" + escapeHTML(chosen.riskLabel) + "</b> — " + chosen.distanceKm.toFixed(1) + " km, " +
+        Math.round(chosen.durationMin) + " min, risk " + chosen.riskLevel + " (" + chosen.riskScore + "/100), " +
+        chosen.hazards.length + " hazard(s) nearby.");
+    renderRouteIntelligence();
+}
+
+function renderDemoRiskPoints(targetMap) {
+    const m = targetMap || map;
+    if (!m) return;
+    nerDemoRiskMarkers.forEach(function (mk) { m.removeLayer(mk); });
+    nerDemoRiskMarkers = [];
+    NER_DEMO_RISK_POINTS.forEach(function (r) {
+        const color = RISK_COLORS[normalizeSeverity(r.level)];
+        const icon = L.divIcon({
+            className: "",
+            html: '<span class="incident-marker-dot" style="background:' + color + '"></span>',
+            iconSize: [16, 16], iconAnchor: [8, 8], popupAnchor: [0, -8]
+        });
+        const mk = L.marker([r.lat, r.lng], { icon: icon }).addTo(m)
+            .bindPopup("<b>⚠️ " + escapeHTML(r.label) + "</b><br>Risk level: " + escapeHTML(r.level) +
+                "<br><small>Demo presentation data — not a live feed.</small>");
+        nerDemoRiskMarkers.push(mk);
+    });
+}
+
+/* ==========================================================================
    7. NEARBY FACILITIES
    ========================================================================== */
 

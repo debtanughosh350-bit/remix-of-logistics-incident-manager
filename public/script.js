@@ -284,10 +284,20 @@ function checkAccessibility() {
         setText("route-status", "Please click a location on the map first.");
         return;
     }
-    setText(
-        "location-display",
-        "📍 Selected: " + formatLatLng(selectedStart.lat, selectedStart.lng)
-    );
+    const label = formatLatLng(selectedStart.lat, selectedStart.lng);
+    setText("location-display", "📍 Selected: " + label);
+    setText("selected-location", label);
+
+    const nearby = getRiskInfoNear(selectedStart.lat, selectedStart.lng);
+    setText("risk", nearby.hazards.length ? nearby.level + " (" + nearby.hazards.length + " hazard(s) within 3 km)" : "Low (no known hazards nearby)");
+    setText("road", nearby.hazards.some(function (h) { return /block|landslide|bridge|road/i.test(h.label); }) ? "Disruption reported nearby" : "No disruption reported");
+    setText("hospital", "Use 'Find Nearby Facilities' to check");
+    setText("overall-status",
+        nearby.hazards.length
+            ? "Location set. " + nearby.level + " hazard risk nearby: " + nearby.hazards.slice(0, 2).map(function (h) { return h.label; }).join(", ") + ". Search a destination to calculate a risk-aware route."
+            : "Location set. No known hazards within 3 km. Search a destination to calculate a risk-aware route.");
+
+    if (map) map.closePopup();
     setText("route-status", "Location set. Choose a destination or find nearby facilities.");
 }
 
